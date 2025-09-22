@@ -122,7 +122,7 @@ def Hamiltonian(L, states, index, pbc=False, k=0):
 L = 22
 
 gamma_plus = 10.0
-gamma_minus = 1.0
+gamma_minus = 0.01
 
 basis = generation_basis(L, pbc=True)
 
@@ -165,15 +165,63 @@ for i in range(len(eigenvalues_W)):
     print("Steady state:", eigenvalues_W[i])    
     k+=1
 
+for i in range(len(eigenvalues_W)):
+  if np.abs(np.real(eigenvalues_W[i])) < threshold:
+    print(eigenvalues_W[i])
+
 print(steady_states.shape)
 print(scars_vecs.shape)
 
+h_sort = np.sort(eigenvalues_H)
+w_sort = np.sort(np.real(eigenvalues_W))
+
+# print(np.real(W) - H)
+mat_dif = np.real(W) - H
+
+plt.matshow(np.real(mat_dif), cmap='viridis')
+# plt.matshow(H, cmap='viridis')
+plt.colorbar()
+
+# plt.show()
+plt.close()
+
+
+
+plt.plot(h_sort, w_sort)
+plt.grid()
+# plt.show()
+plt.close()
+
 steady_over_scar = np.abs((steady_states @ scars_vecs))**2
+
+
+
 
 plt.matshow(steady_over_scar, cmap='viridis', vmin=0, vmax=1)
 plt.colorbar()
-plt.title("Steady states overlap with scar subspace")
-plt.show()
+plt.title("Steady states overlap with scar subspace " + r"$\gamma_{+}=$" + str(gamma_plus) + r", $\gamma_{-}=$" + str(gamma_minus) +"\n" + r"$L=$" + str(L))
+
+# Add text annotations
+for (i, j), val in np.ndenumerate(steady_over_scar):
+    plt.text(j, i, f"{val:.2f}", ha='center', va='center', color='white')
+
+plt.yticks([])
+plt.xticks([i for i in range(L)], [f"{scars_vals[i]:.2f}" for i in range(L)], rotation=45)
+plt.xlabel("Scar eigenvalues")
+plt.gca().xaxis.set_ticks_position("bottom")
+
+# Save figure
+filename = f"/home/wccuirom/repos/pxp_clock/fig/L_{L}/scars_overlap_gp-{gamma_plus}_gm-{gamma_minus}_L-{L}.png"
+plt.savefig(filename, bbox_inches="tight", dpi=300)
+
+plt.close()
+
+# plt.show()
+
+
+
+
+
 
 # for i in steady_states:
 #   print(i @ scars_vecs)
@@ -193,27 +241,81 @@ plt.plot(np.real(eigenvalues_W), eigenvalues_W_proj, 'bo')
 for i in index_steady:
   plt.plot(np.real(eigenvalues_W[i]), eigenvalues_W_proj[i], 'r*', markersize=12)
 plt.grid()
-plt.title("Overlap with scar subspace")
-plt.show()
+plt.title(
+    rf"Overlap with scar subspace  "
+    rf"$\gamma_+ = {gamma_plus},\ \gamma_- = {gamma_minus}$" "\n"
+    rf"$L = {L}$"
+)
+plt.xlabel(r"Re$(\lambda)$")
+plt.ylabel(r"$<\psi|P_{scars}|\psi>$")
+
+# Save figure
+filename = f"/home/wccuirom/repos/pxp_clock/fig/L_{L}/sum_scars_overlap_gp-{gamma_plus}_gm-{gamma_minus}_L-{L}.png"
+plt.savefig(filename, bbox_inches="tight", dpi=300)
+
+plt.close()
+# plt.show()
+
+
+
+
+
+
 
 
 plt.matshow(np.real(W), cmap='viridis')
 plt.colorbar()
-plt.title("Transition matrix |W|")
-plt.show()
+plt.title("Transition matrix |W|" + r" $\gamma_{+}=$" + str(gamma_plus) + r", $\gamma_{-}=$" + str(gamma_minus) +"\n" + r"$L=$" + str(L))
+plt.yticks([])
+plt.xticks([])
+
+# Save figure
+filename = f"/home/wccuirom/repos/pxp_clock/fig/L_{L}/W_matrix_gp-{gamma_plus}_gm-{gamma_minus}_L-{L}.png"
+plt.savefig(filename, bbox_inches="tight", dpi=300)
+
+# plt.show()
+plt.close()
+
+
+
 
 
 plt.plot(np.real(eigenvalues_W), np.imag(eigenvalues_W), 'bo')
-plt.title("Eigenvalues of W")
-plt.show()
+for i in index_steady:
+  plt.plot(np.real(eigenvalues_W[i]), np.imag(eigenvalues_W[i]), 'r*', markersize=12)
+plt.title("Eigenvalues of W" + r" $\gamma_{+}=$" + str(gamma_plus) + r", $\gamma_{-}=$" + str(gamma_minus) +"\n" + r"$L=$" + str(L))
+plt.xlabel(r"Re$(\lambda)$")
+plt.ylabel(r"Im$(\lambda)$")
+plt.grid()
+
+# Save figure
+filename = f"/home/wccuirom/repos/pxp_clock/fig/L_{L}/W_eig_gp-{gamma_plus}_gm-{gamma_minus}_L-{L}.png"
+plt.savefig(filename, bbox_inches="tight", dpi=300)
+
+# plt.show()
+plt.close()
+
+
+
+
+
 
 
 plt.plot(np.real(eigenvalues_W), neel_proj, 'bo')
 for i in index_steady:
   plt.plot(np.real(eigenvalues_W[i]), eigenvalues_W_proj[i], 'r*', markersize=12)
-plt.title("Overlap with Neel state")
-# plt.plot(scars_vals, np.abs(scars_vecs[index_neel])**2, 'ro')
+plt.title("Overlap with Neel state" + r"$\gamma_{+}=$" + str(gamma_plus) + r", $\gamma_{-}=$" + str(gamma_minus) +"\n" + r"$L=$" + str(L))
+plt.xlabel(r"Im$(\lambda)$")
+plt.ylabel(r"$<\psi|P_{Neel}|\psi>$")
+plt.grid()
+
+# Save figure
+filename = f"/home/wccuirom/repos/pxp_clock/fig/L_{L}/overlap_Neel_gp-{gamma_plus}_gm-{gamma_minus}_L-{L}.png"
+# plt.savefig(filename, bbox_inches="tight", dpi=300)
+
 plt.show()
+plt.close()
+
 
 
 # print(W)
