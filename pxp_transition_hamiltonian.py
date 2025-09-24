@@ -49,7 +49,7 @@ def generation_basis(L, pbc=False):
 
 def transition_matrix(L, states, index, gamma_plus, gamma_minus, pbc=False, k=0):
   W = np.zeros((len(states), len(states)), dtype=complex)
- 
+
   if pbc:
     for state in states:
       for i in range(L):
@@ -64,12 +64,13 @@ def transition_matrix(L, states, index, gamma_plus, gamma_minus, pbc=False, k=0)
               state_p = state_ii_p
               d = j
           if state & 1<<i:
-            W [ index[state_p][0], index[state][0]] += gamma_minus * np.exp(-1j * 2 * np.pi * k * d / L) * np.sqrt(index[state][1] / index[state_p][1] )
+            W [ index[state_p][0], index[state][0]] += gamma_plus * np.exp(-1j * 2 * np.pi * k * d / L) * np.sqrt(index[state][1] / index[state_p][1] )
             # print("gamma_minus")
           else:
-            W [ index[state_p][0], index[state][0]] += gamma_plus * np.exp(-1j * 2 * np.pi * k * d / L) * np.sqrt(index[state][1] / index[state_p][1] )
+            W [ index[state_p][0], index[state][0]] += gamma_minus * np.exp(-1j * 2 * np.pi * k * d / L) * np.sqrt(index[state][1] / index[state_p][1] )
             # print("gamma_plus")          
-          W [ index[state][0], index[state][0] ] -= gamma_plus if not (state & 1<<i) else gamma_minus
+    # np.fill_diagonal(W, -np.sum(W, axis=0))
+          W [ index[state][0], index[state][0] ] -= np.sum(W[:, index[state][0]])
           # print("{:04b} --h-- {:04b} -- T -- {:04b}".format(state, state_i_p, state_p),i,d)
           # print("Index:", index[state][0], index[state][1], index[state_p][0], index[state_p][1])
         
@@ -87,7 +88,7 @@ def transition_matrix(L, states, index, gamma_plus, gamma_minus, pbc=False, k=0)
             # print("{:04b} --h-- {:04b}".format(state, state_i_p),i)
   return W       
 
-def Hamiltonian(L, states, index, pbc=False, k=0):
+def Hamiltonian(L, states, index, omega, pbc=False, k=0):
   
   H = np.zeros((len(states), len(states)), dtype=complex)
   
@@ -104,7 +105,7 @@ def Hamiltonian(L, states, index, pbc=False, k=0):
             if state_ii_p < state_p:
               state_p = state_ii_p
               d = j
-          H [ index[state_p][0], index[state][0]] += np.exp(-1j * 2 * np.pi * k * d / L) * np.sqrt(index[state][1] / index[state_p][1] )
+          H [ index[state_p][0], index[state][0]] += omega * np.exp(-1j * 2 * np.pi * k * d / L) * np.sqrt(index[state][1] / index[state_p][1] )
           # print("{:04b} --h-- {:04b} -- T -- {:04b}".format(state, state_i_p, state_p),i,d)
           # print("Index:", index[state][0], index[state][1], index[state_p][0], index[state_p][1])
   else:
@@ -112,26 +113,28 @@ def Hamiltonian(L, states, index, pbc=False, k=0):
       for i in range(1,L-1):
         if (state >> (i-1)) & 1 == 0 and (state >> (i+1)) & 1 == 0:
             state_p = state ^ 2**i
-            H [ index[state], index[state_p] ] += 1
+            H [ index[state], index[state_p] ] += omega
 
             # print("{:04b} --h-- {:04b}".format(state, state_i_p),i)
   return H       
 
 # print(fibonacci_basis)
 
-L = 22
+L = 8
 
-gamma_plus = 10.0
-gamma_minus = 0.01
+omega = 1.0
 
-basis = generation_basis(L, pbc=True)
+gamma_plus = 1.0
+gamma_minus = 1.0
 
-H = Hamiltonian(L, basis[0], basis[1], pbc=True)
+basis = generation_basis(L, pbc=False)
+
+H = Hamiltonian(L, basis[0], basis[1], omega, pbc=False)
 
 eigenvalues_H, eigenvectors_H = np.linalg.eigh(H)
 
 neel_state = sum(1 << i for i in range(0, L, 2))
-index_neel = basis[1][neel_state][0]
+index_neel = basis[1][neel_state]
 neel_proj = np.abs(eigenvectors_H[index_neel])**2
 
 scars_vals = np.zeros(L)
@@ -148,7 +151,7 @@ for i, val in enumerate(neel_proj):
 # for i in basis[0]:
 #   print("{:04b}".format(i))
 
-W = transition_matrix(L, basis[0], basis[1], gamma_plus, gamma_minus, pbc=True)
+W = transition_matrix(L, basis[0], basis[1], gamma_plus, gamma_minus, pbc=False)
 
 eigenvalues_W, eigenvectors_W = np.linalg.eig(W)
 
@@ -165,9 +168,13 @@ for i in range(len(eigenvalues_W)):
     print("Steady state:", eigenvalues_W[i])    
     k+=1
 
+s=0
 for i in range(len(eigenvalues_W)):
+  s += np.abs(np.sum(eigenvectors_W[:,i]))<threshold
   if np.abs(np.real(eigenvalues_W[i])) < threshold:
     print(eigenvalues_W[i])
+
+print(s)
 
 print(steady_states.shape)
 print(scars_vecs.shape)
@@ -176,13 +183,14 @@ h_sort = np.sort(eigenvalues_H)
 w_sort = np.sort(np.real(eigenvalues_W))
 
 # print(np.real(W) - H)
-mat_dif = np.real(W) - H
+mat_dif = W - H
+
 
 plt.matshow(np.real(mat_dif), cmap='viridis')
 # plt.matshow(H, cmap='viridis')
 plt.colorbar()
 
-# plt.show()
+plt.show()
 plt.close()
 
 
@@ -227,7 +235,7 @@ plt.close()
 #   print(i @ scars_vecs)
 
 neel_state = sum(1 << i for i in range(0, L, 2))
-index_neel = basis[1][neel_state][0]
+index_neel = basis[1][neel_state]
 neel_proj = np.abs(eigenvectors_W[index_neel])**2
 
 eigenvalues_W_proj = np.zeros(len(eigenvalues_W))
