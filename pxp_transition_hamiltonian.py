@@ -64,13 +64,13 @@ def transition_matrix(L, states, index, gamma_plus, gamma_minus, pbc=False, k=0)
               state_p = state_ii_p
               d = j
           if state & 1<<i:
-            W [ index[state_p][0], index[state][0]] += gamma_plus * np.exp(-1j * 2 * np.pi * k * d / L) * np.sqrt(index[state][1] / index[state_p][1] )
+            W [ index[state_p][0], index[state][0]] += gamma_minus * index[state][1] / index[state_p][1]
             # print("gamma_minus")
           else:
-            W [ index[state_p][0], index[state][0]] += gamma_minus * np.exp(-1j * 2 * np.pi * k * d / L) * np.sqrt(index[state][1] / index[state_p][1] )
+            W [ index[state_p][0], index[state][0]] += gamma_plus * index[state][1] / index[state_p][1]
             # print("gamma_plus")          
     # np.fill_diagonal(W, -np.sum(W, axis=0))
-          W [ index[state][0], index[state][0] ] -= np.sum(W[:, index[state][0]])
+          W [ index[state][0], index[state][0] ] -= gamma_plus if not (state & 1<<i) else gamma_minus
           # print("{:04b} --h-- {:04b} -- T -- {:04b}".format(state, state_i_p, state_p),i,d)
           # print("Index:", index[state][0], index[state][1], index[state_p][0], index[state_p][1])
         
@@ -120,21 +120,21 @@ def Hamiltonian(L, states, index, omega, pbc=False, k=0):
 
 # print(fibonacci_basis)
 
-L = 8
+L = 20
 
 omega = 1.0
 
 gamma_plus = 1.0
-gamma_minus = 1.0
+gamma_minus = 0.01
 
-basis = generation_basis(L, pbc=False)
+basis = generation_basis(L, pbc=True)
 
-H = Hamiltonian(L, basis[0], basis[1], omega, pbc=False)
+H = Hamiltonian(L, basis[0], basis[1], omega, pbc=True)
 
 eigenvalues_H, eigenvectors_H = np.linalg.eigh(H)
 
 neel_state = sum(1 << i for i in range(0, L, 2))
-index_neel = basis[1][neel_state]
+index_neel = basis[1][neel_state][0]
 neel_proj = np.abs(eigenvectors_H[index_neel])**2
 
 scars_vals = np.zeros(L)
@@ -151,9 +151,16 @@ for i, val in enumerate(neel_proj):
 # for i in basis[0]:
 #   print("{:04b}".format(i))
 
-W = transition_matrix(L, basis[0], basis[1], gamma_plus, gamma_minus, pbc=False)
+W = transition_matrix(L, basis[0], basis[1], gamma_plus, gamma_minus, pbc=True)
 
 eigenvalues_W, eigenvectors_W = np.linalg.eig(W)
+
+#cleaning eigenvalues
+for i in range(len(eigenvalues_W)):
+  if np.abs(np.real(eigenvalues_W[i])) < 1e-10:
+    eigenvalues_W[i] = 1j * np.imag(eigenvalues_W[i])
+  if np.abs(np.imag(eigenvalues_W[i])) < 1e-10:
+    eigenvalues_W[i] = np.real(eigenvalues_W[i])
 
 # Filterign steady states
 threshold = 1e-10
@@ -167,9 +174,69 @@ for i in range(len(eigenvalues_W)):
     index_steady.append(i)
     print("Steady state:", eigenvalues_W[i])    
     k+=1
+  
 
+#Filetring Pure Imaginary states
+threshold_im = 1e-2
+number_imaginary_states = np.sum(np.abs(np.real(eigenvalues_W)) < threshold_im)
+imaginary_states= np.zeros((number_imaginary_states,eigenvectors_W.shape[0]), dtype=complex)
+index_imaginary = []
+k=0
+for i in range(len(eigenvalues_W)):
+  if np.abs(np.real(eigenvalues_W[i])) < threshold_im and i not in index_steady:
+    imaginary_states[k] = eigenvectors_W[:,i]
+    index_imaginary.append(i)
+    print("Imaginary state:", eigenvalues_W[i])    
+    k+=1
+
+def magentization_basis(n, L):
+    ones = bin(n).count("1")
+    return 2 * ones - L
+
+def manetization_state(state,L):
+  magnetization_state = 0
+  for i in range(len(state)):
+    magnetization_state += np.real(state[i]) * magentization_basis(basis[0][i], L)
+  return magnetization_state
+
+
+
+test = steady_states[0] + imaginary_states[0]
+
+dt = 0.01
+time = 100
+magentization = np.zeros(time)
+for t in range(time):
+  test = test + dt * W @ test
+  test = test / np.sum(test)
+  # print(test)
+  magentization[t] = manetization_state(test,L)
+  # print(manetization_state(test,L))
+  
+
+# print(magentization)
+
+time_array = np.arange(0, time*dt, dt)
+plt.plot(time_array, magentization)
+plt.xlabel("Time")
+plt.ylabel("Magnetization")
+plt.title("Magnetization vs Time" + r" $\gamma_{+}=$" + str(gamma_plus) + r", $\gamma_{-}=$" + str(gamma_minus) +"\n" + r"$L=$" + str(L))
+plt.grid()
+plt.show()
+plt.close()
+
+
+
+
+
+
+# print("Magnetization of first imaginary state + first steady state:", magnetization_state)
+
+
+# Sanity checks
 s=0
 for i in range(len(eigenvalues_W)):
+  print(np.abs(np.sum(eigenvectors_W[:,i])))
   s += np.abs(np.sum(eigenvectors_W[:,i]))<threshold
   if np.abs(np.real(eigenvalues_W[i])) < threshold:
     print(eigenvalues_W[i])
@@ -235,7 +302,7 @@ plt.close()
 #   print(i @ scars_vecs)
 
 neel_state = sum(1 << i for i in range(0, L, 2))
-index_neel = basis[1][neel_state]
+index_neel = basis[1][neel_state][0]
 neel_proj = np.abs(eigenvectors_W[index_neel])**2
 
 eigenvalues_W_proj = np.zeros(len(eigenvalues_W))

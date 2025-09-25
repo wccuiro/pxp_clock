@@ -2,6 +2,10 @@ import numpy as np
 
 import matplotlib.pyplot as plt
 
+#############################################################################
+###################### GENERATION OF THE BASIS ##############################
+#############################################################################
+
 def fibonacci_basis(L, pbc=False):
   states = []
   for i in range(1 << L):
@@ -46,6 +50,9 @@ def generation_basis(L, pbc=False):
     rep_index = {s: i for i,  s in enumerate(rep_states)}
   return rep_states, rep_index
 
+#############################################################################
+###################### GENERATION OF THE HAMILTONIAN ########################
+#############################################################################
 
 def Hamiltonian(L, states, index, omega, pbc=False, k=0):
   
@@ -77,6 +84,10 @@ def Hamiltonian(L, states, index, omega, pbc=False, k=0):
             # print("{:04b} --h-- {:04b}".format(state, state_i_p),i)
   return H       
 
+#############################################################################
+###################### GENERATION OF THE DISSIPATOR #########################
+#############################################################################
+
 def dissipation(L, states, index, gamma_plus, gamma_minus, pbc=False, k=0):
   D_minus = np.zeros((len(states)**2, len(states)**2), dtype=complex)
   D_plus = np.zeros((len(states)**2, len(states)**2), dtype=complex)
@@ -100,16 +111,16 @@ def dissipation(L, states, index, gamma_plus, gamma_minus, pbc=False, k=0):
               state_p = state_ii_p
               d = j
           if state & 1<<i:
-            L_minus_i [ index[state_p][0], index[state][0]] += gamma_minus * np.exp(-1j * 2 * np.pi * k * d / L) * np.sqrt(index[state][1] / index[state_p][1] )
+            L_minus_i [ index[state_p][0], index[state][0]] += np.exp(-1j * 2 * np.pi * k * d / L) * np.sqrt(index[state][1] / index[state_p][1] )
             # print("gamma_minus")
           else:
-            L_plus_i [ index[state_p][0], index[state][0]] += gamma_plus * np.exp(-1j * 2 * np.pi * k * d / L) * np.sqrt(index[state][1] / index[state_p][1] )
+            L_plus_i [ index[state_p][0], index[state][0]] += np.exp(-1j * 2 * np.pi * k * d / L) * np.sqrt(index[state][1] / index[state_p][1] )
             # print("gamma_plus")          
 
       D_minus += np.kron(L_minus_i, L_minus_i.conj()) - 0.5 * np.kron(L_minus_i.conj().T @ L_minus_i, np.eye(len(states))) - 0.5 * np.kron(np.eye(len(states)), (L_minus_i.conj().T @ L_minus_i).T)
       D_plus += np.kron(L_plus_i, L_plus_i.conj()) - 0.5 * np.kron(L_plus_i.conj().T @ L_plus_i, np.eye(len(states))) - 0.5 * np.kron(np.eye(len(states)), (L_plus_i.conj().T @ L_plus_i).T)
     
-    D = D_minus + D_plus
+    D = gamma_minus * D_minus + gamma_plus * D_plus
     
     return D
 
@@ -124,39 +135,126 @@ def dissipation(L, states, index, gamma_plus, gamma_minus, pbc=False, k=0):
           state_p = state ^ (1 << i)
           d = 0
           if state & 1<<i:
-            L_minus_i [ index[state_p], index[state]] += gamma_minus
+            L_minus_i [ index[state_p], index[state]] += 1
             # print("gamma_minus")
           else:
-            L_plus_i [ index[state_p], index[state]] += gamma_plus
+            L_plus_i [ index[state_p], index[state]] += 1
             # print("gamma_plus")          
 
       D_minus += np.kron(L_minus_i, L_minus_i.conj()) - 0.5 * np.kron(L_minus_i.conj().T @ L_minus_i, np.eye(len(states))) - 0.5 * np.kron(np.eye(len(states)), (L_minus_i.conj().T @ L_minus_i).T)
       D_plus += np.kron(L_plus_i, L_plus_i.conj()) - 0.5 * np.kron(L_plus_i.conj().T @ L_plus_i, np.eye(len(states))) - 0.5 * np.kron(np.eye(len(states)), (L_plus_i.conj().T @ L_plus_i).T)
     
-    D = D_minus + D_plus
+    D = gamma_minus * D_minus + gamma_plus * D_plus
     
     return D
-  
+
+#############################################################################
+###################### GENERATION OF THE LINDBLADIAN ########################
+#############################################################################
+
 def lindblad_evolution(H, D):
   I = np.eye(H.shape[0])
   L = -1j * (np.kron(H, I) - np.kron(I, H.T)) + D
   return L
 
+#############################################################################
+###################### GENERATION OF THE TRANSITION MATRIX ##################
+#############################################################################
+
+def transition_matrix(L, states, index, gamma_plus, gamma_minus, pbc=False, k=0):
+  W = np.zeros((len(states), len(states)), dtype=complex)
+
+  if pbc:
+    for state in states:
+      for i in range(L):
+        if ((state >> ((i-1)%L)) & 1) == 0 and ((state >> ((i+1)%L)) & 1) == 0:
+          state_i_p = state ^ (1 << i)
+          state_p = state_i_p
+          d = 0
+          for j in range(L):
+            state_ii_p = ((state_i_p << j) | (state_i_p >> (L - j))) & ((1 << L) - 1)
+            
+            if state_ii_p < state_p:
+              state_p = state_ii_p
+              d = j
+          if state & 1<<i:
+            W [ index[state_p][0], index[state][0]] += gamma_minus * index[state][1] / index[state_p][1]
+            # print("gamma_minus")
+          else:
+            W [ index[state_p][0], index[state][0]] += gamma_plus * index[state][1] / index[state_p][1]
+            # print("gamma_plus")          
+    # np.fill_diagonal(W, -np.sum(W, axis=0))
+          W [ index[state][0], index[state][0] ] -= gamma_minus if state & 1<<i else gamma_plus
+          # print("{:04b} --h-- {:04b} -- T -- {:04b}".format(state, state_i_p, state_p),i,d)
+          # print("Index:", index[state][0], index[state][1], index[state_p][0], index[state_p][1])
+        
+        
+  else:
+    for state in states:
+      for i in range(1,L-1):
+        if (state >> (i-1)) & 1 == 0 and (state >> (i+1)) & 1 == 0:
+          state_p = state ^ 2**i
+          if state & 1<<i:
+            W [ index[state_p], index[state]] += gamma_minus
+          else:
+            W [ index[state_p], index[state]] += gamma_plus
+          W [ index[state], index[state] ] -= gamma_plus if not (state & 1<<i) else gamma_minus
+            # print("{:04b} --h-- {:04b}".format(state, state_i_p),i)
+  return W       
+
+#############################################################################
+#############################################################################
+#############################################################################
 
 L = 10
-basis = generation_basis(L, pbc=False)
+basis = generation_basis(L, pbc=True)
 
 print("Basis size:", len(basis[0])**2)
 
 gamma_plus = 1.0
-gamma_minus = 1.0
+gamma_minus = 0.5
 omega = 0.0
 
-H = Hamiltonian(L, basis[0], basis[1], omega, pbc=False)
-D = dissipation(L, basis[0], basis[1], gamma_plus, gamma_minus, pbc=False)
+H = Hamiltonian(L, basis[0], basis[1], omega, pbc=True)
+D = dissipation(L, basis[0], basis[1], gamma_plus, gamma_minus, pbc=True)
 Lind = lindblad_evolution(H, D)
 
+W = transition_matrix(L, basis[0], basis[1], gamma_plus, gamma_minus, pbc=True)
+
 eigenvalues_Lind, eigenvectors_Lind = np.linalg.eig(Lind)
+eigenvalues_W, eigenvectors_W = np.linalg.eig(W)
+
+#############################################################################
+###################### CLEANING EIGENVALUES #################################
+#############################################################################
+
+threshold_eigval = 1e-10
+
+for i in range(len(eigenvalues_Lind)):
+  if np.abs(np.real(eigenvalues_Lind[i])) < threshold_eigval:
+    eigenvalues_Lind[i] = 1j * np.imag(eigenvalues_Lind[i])
+  if np.abs(np.imag(eigenvalues_Lind[i])) < threshold_eigval:
+    eigenvalues_Lind[i] = np.real(eigenvalues_Lind[i])
+
+for i in range(len(eigenvalues_W)):
+  if np.abs(np.real(eigenvalues_W[i])) < threshold_eigval:
+    eigenvalues_W[i] = 1j * np.imag(eigenvalues_W[i])
+  if np.abs(np.imag(eigenvalues_W[i])) < threshold_eigval:
+    eigenvalues_W[i] = np.real(eigenvalues_W[i])
+
+plt.plot(np.real(eigenvalues_W), np.imag(eigenvalues_W), 'o')
+plt.plot(np.real(eigenvalues_Lind), np.imag(eigenvalues_Lind), 'x')
+plt.xlabel('Re')
+plt.ylabel('Im')
+plt.show()
+plt.close()
+
+l=0
+for i in range(len(eigenvalues_Lind)):
+  rho = eigenvectors_Lind[:,i].reshape((H.shape[0], H.shape[0]), order='C')
+  if np.trace(rho) < 1e-10:
+    l+=1
+print(l)
 
 threshold = 1e-10
 
@@ -179,12 +277,15 @@ steady_state = steady_state / tr
 print(steady_state.shape)
 
 neel_state = sum(1 << i for i in range(0, L, 2))
-index_neel = basis[1][neel_state]
+index_neel = basis[1][neel_state][0]
 print(steady_state[index_neel, index_neel])
 print(index_neel)
 
+print("Eigenvalues of Lindbladian:")
+print(eigenvalues_Lind)
 
 # print(Lind)
+
 plt.matshow(np.real(Lind), cmap='viridis')
 # plt.matshow(H, cmap='viridis')
 plt.colorbar()
