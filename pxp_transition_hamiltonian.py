@@ -68,9 +68,9 @@ def transition_matrix(L, states, index, gamma_plus, gamma_minus, pbc=False, k=0)
             # print("gamma_minus")
           else:
             W [ index[state_p][0], index[state][0]] += gamma_plus * index[state][1] / index[state_p][1]
-            # print("gamma_plus")          
+            # print("gamma_plus")           
     # np.fill_diagonal(W, -np.sum(W, axis=0))
-          W [ index[state][0], index[state][0] ] -= gamma_plus if not (state & 1<<i) else gamma_minus
+          W [ index[state][0], index[state][0] ] -= gamma_plus * index[state][1] / index[state_p][1] if not (state & 1<<i) else gamma_minus * index[state][1] / index[state_p][1]
           # print("{:04b} --h-- {:04b} -- T -- {:04b}".format(state, state_i_p, state_p),i,d)
           # print("Index:", index[state][0], index[state][1], index[state_p][0], index[state_p][1])
         

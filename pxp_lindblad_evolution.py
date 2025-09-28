@@ -162,7 +162,7 @@ def lindblad_evolution(H, D):
 #############################################################################
 
 def transition_matrix(L, states, index, gamma_plus, gamma_minus, pbc=False, k=0):
-  W = np.zeros((len(states), len(states)), dtype=complex)
+  W = np.zeros((len(states), len(states)))
 
   if pbc:
     for state in states:
@@ -178,13 +178,13 @@ def transition_matrix(L, states, index, gamma_plus, gamma_minus, pbc=False, k=0)
               state_p = state_ii_p
               d = j
           if state & 1<<i:
-            W [ index[state_p][0], index[state][0]] += gamma_minus * index[state][1] / index[state_p][1]
+            W [ index[state_p][0], index[state][0]] += gamma_minus * index[state][1] / index[state_p][1] 
             # print("gamma_minus")
           else:
             W [ index[state_p][0], index[state][0]] += gamma_plus * index[state][1] / index[state_p][1]
             # print("gamma_plus")          
     # np.fill_diagonal(W, -np.sum(W, axis=0))
-          W [ index[state][0], index[state][0] ] -= gamma_minus if state & 1<<i else gamma_plus
+          W [ index[state][0], index[state][0] ] -= gamma_minus * index[state][1] / index[state_p][1] if state & 1<<i else gamma_plus * index[state][1] / index[state_p][1]
           # print("{:04b} --h-- {:04b} -- T -- {:04b}".format(state, state_i_p, state_p),i,d)
           # print("Index:", index[state][0], index[state][1], index[state_p][0], index[state_p][1])
         
@@ -206,27 +206,74 @@ def transition_matrix(L, states, index, gamma_plus, gamma_minus, pbc=False, k=0)
 #############################################################################
 #############################################################################
 
-L = 10
-basis = generation_basis(L, pbc=True)
+def diag_indices(N):
+    """Indices in column-stacking vec where |i><i| sits: i + i*N = i*(N+1)."""
+    return np.array([i*(N+1) for i in range(N)], dtype=int)
+
+def project_D_onto_diagonal_subspace(D):
+    """
+    Project superoperator D (shape N^2 x N^2) onto the diagonal operator subspace.
+
+    Returns:
+      D_diag_reduced : (N, N)  -- compressed matrix acting on diagonal operators
+      idx            : (N,)    -- indices in vec-space corresponding to |i><i|
+      D_diag_full    : (N^2, N^2) -- optional full projector result P_diag @ D @ P_diag
+    """
+    dim = D.shape[0]
+    if D.shape[0] != D.shape[1]:
+        raise ValueError("D must be square.")
+    N = int(np.sqrt(dim))
+    if N * N != dim:
+        raise ValueError("Dimension of D must be a perfect square (N^2).")
+
+    idx = diag_indices(N)
+    # full projector (sparse-looking diagonal matrix)
+    Pdiag = np.zeros((dim, dim), dtype=D.dtype)
+    Pdiag[idx, idx] = 1.0
+
+    D_diag_full = Pdiag @ D @ Pdiag
+    D_diag_reduced = D[np.ix_(idx, idx)]
+
+    return D_diag_reduced, idx, D_diag_full
+
+############################################################################
+###################### MAIN PROGRAM ########################################
+############################################################################
+
+
+L = 8
+PBC = True
+k_sector = 0
+basis = generation_basis(L, pbc=PBC)
 
 print("Basis size:", len(basis[0])**2)
 
-gamma_plus = 1.0
-gamma_minus = 0.5
+gamma_plus = 0.1
+gamma_minus = 10.0
 omega = 0.0
 
-H = Hamiltonian(L, basis[0], basis[1], omega, pbc=True)
-D = dissipation(L, basis[0], basis[1], gamma_plus, gamma_minus, pbc=True)
+H = Hamiltonian(L, basis[0], basis[1], omega, pbc=PBC, k=k_sector)
+D = dissipation(L, basis[0], basis[1], gamma_plus, gamma_minus, pbc=PBC, k=k_sector)
 Lind = lindblad_evolution(H, D)
 
-W = transition_matrix(L, basis[0], basis[1], gamma_plus, gamma_minus, pbc=True)
+print(np.min(np.abs(D)))
+
+proj_D, idx, full_proj_D = project_D_onto_diagonal_subspace(D)
+
+W = transition_matrix(L, basis[0], basis[1], gamma_plus, gamma_minus, pbc=PBC, k=k_sector)
+
+print(np.matrix(proj_D))
+print("-----")
+print(np.matrix(W))
+print("Difference:")
+print(np.max(np.abs(W-proj_D)))
 
 eigenvalues_Lind, eigenvectors_Lind = np.linalg.eig(Lind)
 eigenvalues_W, eigenvectors_W = np.linalg.eig(W)
 
-#############################################################################
-###################### CLEANING EIGENVALUES #################################
-#############################################################################
+# #############################################################################
+# ###################### CLEANING EIGENVALUES #################################
+# #############################################################################
 
 threshold_eigval = 1e-10
 
@@ -238,9 +285,10 @@ for i in range(len(eigenvalues_Lind)):
 
 for i in range(len(eigenvalues_W)):
   if np.abs(np.real(eigenvalues_W[i])) < threshold_eigval:
-    eigenvalues_W[i] = 1j * np.imag(eigenvalues_W[i])
-  if np.abs(np.imag(eigenvalues_W[i])) < threshold_eigval:
-    eigenvalues_W[i] = np.real(eigenvalues_W[i])
+    eigenvalues_W[i] = 0
+
+# # for i in range(len(eigenvalues_W)):
+# #   eigenvalues_W[i] = eigenvalues_W[i] * basis[1][basis[0][i]][1]
 
 plt.plot(np.real(eigenvalues_W), np.imag(eigenvalues_W), 'o')
 plt.plot(np.real(eigenvalues_Lind), np.imag(eigenvalues_Lind), 'x')
