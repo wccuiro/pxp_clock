@@ -203,7 +203,7 @@ def transition_matrix(L, states, index, gamma_plus, gamma_minus, pbc=False, k=0)
   return W       
 
 #############################################################################
-#############################################################################
+#################### PROJECTION OVER DIAGONAL ###############################
 #############################################################################
 
 def diag_indices(N):
@@ -236,44 +236,148 @@ def project_D_onto_diagonal_subspace(D):
 
     return D_diag_reduced, idx, D_diag_full
 
+#############################################################################
+################### DENSITY MATRICES NEEL ###################################
+#############################################################################
+
+def rho_neel_state (L, states, index, pbc=False, k=0):
+  rho_neel = np.zeros((len(states),len(states)))
+  neel_state = sum(1 << i for i in range(0, L, 2))
+  if pbc:
+    if k == 0 or k == L/2:
+      rho_neel[index[neel_state][0], index[neel_state][0]] = 1/2      
+  else:
+    rho_neel[index[neel_state], index[neel_state]] = 1
+  
+  return rho_neel
+
+def rho_neel_state_T (L, states, index, pbc=False, k=0):
+  rho_neel = np.zeros((len(states),len(states)))
+  neel_state = sum(1 << i for i in range(0, L, 2))
+  neel_state_T = 2 * neel_state
+  if pbc:
+    if k == 0 or k == L/2:
+      rho_neel[index[neel_state][0], index[neel_state][0]] = 1/2      
+  else:
+    rho_neel[index[neel_state_T], index[neel_state_T]] = 1
+  
+  return rho_neel
+
+def rho_neel_state_sup (L, states, index, pbc=False, k=0):
+  rho_neel = np.zeros((len(states),len(states)))
+  neel_state = sum(1 << i for i in range(0, L, 2))
+  neel_state_T = 2 * neel_state
+  if pbc:
+    if k == 0 or k == L/2:
+      rho_neel[index[neel_state][0], index[neel_state][0]] = 1/4 * np.abs(1 + np.exp(2j * np.pi * k / L))**2      
+  else:
+    rho_neel[index[neel_state], index[neel_state]] = 1/2
+    rho_neel[index[neel_state_T], index[neel_state_T]] = 1/2
+    rho_neel[index[neel_state_T], index[neel_state]] = 1/2
+    rho_neel[index[neel_state], index[neel_state_T]] = 1/2
+  return rho_neel
+
+#############################################################################
+########################### MAGNETIZATION ###################################
+#############################################################################
+
+def magnetization (L, states, index, pbc=False, k=0):
+  S_z = np.zeros((len(states),len(states)))
+  
+  if pbc:
+    for state in states:
+      for i in range(L):
+        if state & (1 << i):
+          S_z [ index[state][0], index[state][0]] += 1
+        else:
+          S_z [ index[state][0], index[state][0]] -= 1
+
+  else:
+    for state in states:
+      for i in range(L):
+        if state & (1 << i):
+          S_z [ index[state][0], index[state][0]] += 1
+        else:
+          S_z [ index[state][0], index[state][0]] -= 1
+
+  return S_z/L       
+
+#############################################################################
+######################### MAGNETIZATION IN TIME #############################
+#############################################################################
+
+def magnetization_in_time (sup_L, rho_init, S_z, t, dt):
+  
+  vec_rho_init =  rho_init.flatten(order='C')
+  
+  steps = int(t/dt)
+  time_array = np.linspace(0, t, steps)
+  
+  magnetization = np.zeros(steps)
+  
+  I = np.eye(len(vec_rho_init))
+  
+  vec_rho = vec_rho_init
+  for i in range(steps):
+    vec_rho = ( I + dt * sup_L) @ vec_rho
+    rho = vec_rho.reshape((rho_init.shape[0], rho_init.shape[0]), order='C')
+    rho_norm = rho / np.trace(rho)
+    magnetization [i] = np.real(np.trace(rho_norm @ S_z))
+    vec_rho = rho_norm.flatten(order='C')
+  
+  return time_array, magnetization
+
+
+############################################################################
 ############################################################################
 ###################### MAIN PROGRAM ########################################
 ############################################################################
+############################################################################
 
+############################################################################
+###################### SETTING MATRICES ####################################
+############################################################################
 
-L = 8
+L = 12
 PBC = True
 k_sector = 0
 basis = generation_basis(L, pbc=PBC)
 
-print("Basis size:", len(basis[0])**2)
-
-gamma_plus = 0.1
-gamma_minus = 10.0
+gamma_plus = 1.0
+gamma_minus = 1.0
 omega = 0.0
 
 H = Hamiltonian(L, basis[0], basis[1], omega, pbc=PBC, k=k_sector)
 D = dissipation(L, basis[0], basis[1], gamma_plus, gamma_minus, pbc=PBC, k=k_sector)
 Lind = lindblad_evolution(H, D)
 
-print(np.min(np.abs(D)))
+W = transition_matrix(L, basis[0], basis[1], gamma_plus, gamma_minus, pbc=PBC, k=k_sector)
 
 proj_D, idx, full_proj_D = project_D_onto_diagonal_subspace(D)
 
-W = transition_matrix(L, basis[0], basis[1], gamma_plus, gamma_minus, pbc=PBC, k=k_sector)
+############################################################################
+###################### SANITY CHECKS PRINTS ################################
+############################################################################
+print("Basis H size:", len(basis[0]))
+print("Basis L = H x H size:", len(basis[0])**2)
 
-print(np.matrix(proj_D))
-print("-----")
-print(np.matrix(W))
-print("Difference:")
-print(np.max(np.abs(W-proj_D)))
+
+# print(np.min(np.abs(D)))
+
+# print(np.matrix(proj_D))
+# print("-----")
+# print(np.matrix(W))
+print("Max Difference between W and PLP:", np.max(np.abs(W-proj_D)))
+
+##############################################################################
+########################## EIGENVALUES CLEAN #################################
+##############################################################################
+
+eigenvalues_proj_D, eigenvectors_proj_D = np.linalg.eig(proj_D)
 
 eigenvalues_Lind, eigenvectors_Lind = np.linalg.eig(Lind)
 eigenvalues_W, eigenvectors_W = np.linalg.eig(W)
 
-# #############################################################################
-# ###################### CLEANING EIGENVALUES #################################
-# #############################################################################
 
 threshold_eigval = 1e-10
 
@@ -287,50 +391,68 @@ for i in range(len(eigenvalues_W)):
   if np.abs(np.real(eigenvalues_W[i])) < threshold_eigval:
     eigenvalues_W[i] = 0
 
+for i in range(len(eigenvalues_proj_D)):
+  if np.abs(np.real(eigenvalues_proj_D[i])) < threshold_eigval:
+    eigenvalues_proj_D[i] = 1j * np.imag(eigenvalues_proj_D[i])
+
 # # for i in range(len(eigenvalues_W)):
 # #   eigenvalues_W[i] = eigenvalues_W[i] * basis[1][basis[0][i]][1]
 
-plt.plot(np.real(eigenvalues_W), np.imag(eigenvalues_W), 'o')
-plt.plot(np.real(eigenvalues_Lind), np.imag(eigenvalues_Lind), 'x')
+plt.plot(np.real(eigenvalues_W), np.imag(eigenvalues_W), 'bo', markersize=7, label='W')
+plt.plot(np.real(eigenvalues_proj_D), np.imag(eigenvalues_proj_D), 'r*', markersize=5, label='PLP')
+plt.plot(np.real(eigenvalues_Lind), np.imag(eigenvalues_Lind), 'gx', label='L')
 plt.xlabel('Re')
 plt.ylabel('Im')
+plt.title('Eigenvalues of W, PLP, L')
+plt.legend(loc = "upper left")
+plt.grid(True)
 plt.show()
 plt.close()
 
+##############################################################################
+########################## EIGENVECTORS CHECK ################################
+##############################################################################
+
+threshold_tr = 1e-7
 l=0
 for i in range(len(eigenvalues_Lind)):
   rho = eigenvectors_Lind[:,i].reshape((H.shape[0], H.shape[0]), order='C')
-  if np.trace(rho) < 1e-10:
+  rho = 0.5*(rho + rho.conj().T)
+  if np.abs(np.trace(rho)) < threshold_tr:
     l+=1
-print(l)
-
-threshold = 1e-10
+print("Number of traceless states with threshold", threshold_tr, ": ",l)
 
 j=0
+vec_steady_states = np.zeros((len(basis[0])**2,len(basis[0])**2-l), dtype=complex) 
 for i in range(eigenvalues_Lind.shape[0]):
-  if np.abs(eigenvalues_Lind[i]) < threshold:
-    vec_steady_state = eigenvectors_Lind[:,i]
+  if np.abs(eigenvalues_Lind[i]) == 0:
+    vec_steady_states[:,j] = eigenvectors_Lind[:,i]
     j+=1
-  if j > 1:
-    print("More than one steady state!")
-    break
 
-steady_state = vec_steady_state.reshape((H.shape[0], H.shape[0]), order='C')
-steady_state = 0.5*(steady_state + steady_state.conj().T)
-tr = np.trace(steady_state)
-if np.abs(tr) < 1e-16:
-    raise RuntimeError("Trace numerically zero; cannot normalize")
-steady_state = steady_state / tr
+print("Number of steady states with threshold", threshold_eigval, ": ",len(basis[0])**2-l)
 
-print(steady_state.shape)
+##############################################################################
+################### NORMALIZATION STEADY STATES ##############################
+##############################################################################
+
+steady_states = np.zeros((len(basis[0])**2-l, len(basis[0]), len(basis[0])), dtype=complex)
+for i in range(len(basis[0])**2-l):
+  steady_state = vec_steady_states[:,i].reshape((H.shape[0], H.shape[0]), order='C')
+  steady_state = 0.5*(steady_state + steady_state.conj().T)
+  tr = np.trace(steady_state)
+  if np.abs(tr) < 1e-16:
+      raise RuntimeError("Trace numerically zero; cannot normalize")
+  steady_states[i] = steady_state / tr
+
+print(steady_states.shape)
 
 neel_state = sum(1 << i for i in range(0, L, 2))
 index_neel = basis[1][neel_state][0]
 print(steady_state[index_neel, index_neel])
 print(index_neel)
 
-print("Eigenvalues of Lindbladian:")
-print(eigenvalues_Lind)
+# print("Eigenvalues of Lindbladian:")
+# print(eigenvalues_Lind)
 
 # print(Lind)
 
@@ -353,4 +475,43 @@ plt.colorbar()
 
 plt.show()
 plt.close()
+
+##############################################################################
+####################### MAGNETIZATION IN TIME ################################
+##############################################################################
+
+S_z = magnetization(L, basis[0], basis[1], pbc=PBC, k=k_sector)
+
+rho_Neel = rho_neel_state(L, basis[0], basis[1], pbc=PBC, k=k_sector)
+rho_Neel_T = rho_neel_state_T(L, basis[0], basis[1], pbc=PBC, k=k_sector)
+rho_Neel_sup = rho_neel_state_sup(L, basis[0], basis[1], pbc=PBC, k=k_sector)
+
+t_final = 10
+dt = 0.01
+
+time_N, magnetization_N = magnetization_in_time (Lind, rho_Neel, S_z, t_final, dt)
+time_N_T, magnetization_N_T = magnetization_in_time (Lind, rho_Neel_T, S_z, t_final, dt)
+time_N_sup, magnetization_N_sup = magnetization_in_time (Lind, rho_Neel_sup, S_z, t_final, dt)
+
+time_steady, magnetization_steady = magnetization_in_time (Lind, steady_states[0], S_z, t_final, dt)
+
+
+plt.figure(figsize=(8,5))
+plt.plot(time_N, magnetization_N, label="Neel", color='blue')
+plt.plot(time_N_T, magnetization_N_T, label="Neel_T", color='red')
+plt.plot(time_N_sup, magnetization_N_sup, label="Neel + Neel_T", color='green')
+plt.plot(time_steady, magnetization_steady, label="Steady state", color='orange')
+
+
+plt.xlabel("Time")
+plt.ylabel("Magnetization per site")
+plt.title("Magnetization dynamics")
+plt.legend()
+plt.grid(True)
+plt.show()
+plt.close()
+
+
+
+
 

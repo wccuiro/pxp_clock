@@ -48,7 +48,7 @@ def generation_basis(L, pbc=False):
 
 
 def transition_matrix(L, states, index, gamma_plus, gamma_minus, pbc=False, k=0):
-  W = np.zeros((len(states), len(states)), dtype=complex)
+  W = np.zeros((len(states), len(states)))
 
   if pbc:
     for state in states:
@@ -158,9 +158,9 @@ eigenvalues_W, eigenvectors_W = np.linalg.eig(W)
 #cleaning eigenvalues
 for i in range(len(eigenvalues_W)):
   if np.abs(np.real(eigenvalues_W[i])) < 1e-10:
-    eigenvalues_W[i] = 1j * np.imag(eigenvalues_W[i])
-  if np.abs(np.imag(eigenvalues_W[i])) < 1e-10:
-    eigenvalues_W[i] = np.real(eigenvalues_W[i])
+    eigenvalues_W[i] = 0
+
+print(eigenvalues_W)
 
 # Filterign steady states
 threshold = 1e-10
@@ -236,7 +236,7 @@ plt.close()
 # Sanity checks
 s=0
 for i in range(len(eigenvalues_W)):
-  print(np.abs(np.sum(eigenvectors_W[:,i])))
+  # print(np.abs(np.sum(eigenvectors_W[:,i])))
   s += np.abs(np.sum(eigenvectors_W[:,i]))<threshold
   if np.abs(np.real(eigenvalues_W[i])) < threshold:
     print(eigenvalues_W[i])
