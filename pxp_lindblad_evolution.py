@@ -296,9 +296,9 @@ def magnetization (L, states, index, pbc=False, k=0):
     for state in states:
       for i in range(L):
         if state & (1 << i):
-          S_z [ index[state][0], index[state][0]] += 1
+          S_z [ index[state], index[state]] += 1
         else:
-          S_z [ index[state][0], index[state][0]] -= 1
+          S_z [ index[state], index[state]] -= 1
 
   return S_z/L       
 
@@ -327,6 +327,82 @@ def magnetization_in_time (sup_L, rho_init, S_z, t, dt):
   
   return time_array, magnetization
 
+#############################################################################
+############################ HEAT CURRENTS ##################################
+#############################################################################
+
+def dissipators(L, states, index, gamma_plus, gamma_minus, pbc=False, k=0):
+  D_minus = np.zeros((len(states)**2, len(states)**2), dtype=complex)
+  D_plus = np.zeros((len(states)**2, len(states)**2), dtype=complex)
+
+  if pbc:
+    
+    for i in range(L):
+
+      L_minus_i = np.zeros((len(states), len(states)), dtype=complex)
+      L_plus_i = np.zeros((len(states), len(states)), dtype=complex)
+
+      for state in states:
+        if ((state >> ((i-1)%L)) & 1) == 0 and ((state >> ((i+1)%L)) & 1) == 0:
+          state_i_p = state ^ (1 << i)
+          state_p = state_i_p
+          d = 0
+          for j in range(L):
+            state_ii_p = ((state_i_p << j) | (state_i_p >> (L - j))) & ((1 << L) - 1)
+            
+            if state_ii_p < state_p:
+              state_p = state_ii_p
+              d = j
+          if state & 1<<i:
+            L_minus_i [ index[state_p][0], index[state][0]] += np.exp(-1j * 2 * np.pi * k * d / L) * np.sqrt(index[state][1] / index[state_p][1] )
+            # print("gamma_minus")
+          else:
+            L_plus_i [ index[state_p][0], index[state][0]] += np.exp(-1j * 2 * np.pi * k * d / L) * np.sqrt(index[state][1] / index[state_p][1] )
+            # print("gamma_plus")          
+
+      D_minus += np.kron(L_minus_i, L_minus_i.conj()) - 0.5 * np.kron(L_minus_i.conj().T @ L_minus_i, np.eye(len(states))) - 0.5 * np.kron(np.eye(len(states)), (L_minus_i.conj().T @ L_minus_i).T)
+      D_plus += np.kron(L_plus_i, L_plus_i.conj()) - 0.5 * np.kron(L_plus_i.conj().T @ L_plus_i, np.eye(len(states))) - 0.5 * np.kron(np.eye(len(states)), (L_plus_i.conj().T @ L_plus_i).T)
+    
+    return gamma_minus * D_minus, gamma_plus * D_plus
+
+  else:
+    for i in range(1,L-1):
+
+      L_minus_i = np.zeros((len(states), len(states)), dtype=complex)
+      L_plus_i = np.zeros((len(states), len(states)), dtype=complex)
+
+      for state in states:
+        if ((state >> (i-1)) & 1) == 0 and ((state >> (i+1)) & 1) == 0:
+          state_p = state ^ (1 << i)
+          d = 0
+          if state & 1<<i:
+            L_minus_i [ index[state_p], index[state]] += 1
+            # print("gamma_minus")
+          else:
+            L_plus_i [ index[state_p], index[state]] += 1
+            # print("gamma_plus")          
+
+      D_minus += np.kron(L_minus_i, L_minus_i.conj()) - 0.5 * np.kron(L_minus_i.conj().T @ L_minus_i, np.eye(len(states))) - 0.5 * np.kron(np.eye(len(states)), (L_minus_i.conj().T @ L_minus_i).T)
+      D_plus += np.kron(L_plus_i, L_plus_i.conj()) - 0.5 * np.kron(L_plus_i.conj().T @ L_plus_i, np.eye(len(states))) - 0.5 * np.kron(np.eye(len(states)), (L_plus_i.conj().T @ L_plus_i).T)
+    
+    return gamma_minus * D_minus, gamma_plus * D_plus
+
+
+def heat_current(rho, sup_p_D, sup_m_D,H):
+  
+  vec_rho=  rho.flatten(order='C')
+    
+  vec_rho_p = sup_p_D @ vec_rho
+  vec_rho_m = sup_m_D @ vec_rho
+
+  rho_p = vec_rho_p.reshape((rho.shape[0], rho.shape[0]), order='C')
+  rho_m = vec_rho_m.reshape((rho.shape[0], rho.shape[0]), order='C')
+
+  current_p = np.real(np.trace(rho_p @ H))
+  current_m = np.real(np.trace(rho_m @ H))
+  
+  return current_p, current_m
+
 
 ############################################################################
 ############################################################################
@@ -343,9 +419,9 @@ PBC = True
 k_sector = 0
 basis = generation_basis(L, pbc=PBC)
 
-gamma_plus = 1.0
-gamma_minus = 1.0
-omega = 0.0
+gamma_plus = 0.5
+gamma_minus = 0.01
+omega = 0.01
 
 H = Hamiltonian(L, basis[0], basis[1], omega, pbc=PBC, k=k_sector)
 D = dissipation(L, basis[0], basis[1], gamma_plus, gamma_minus, pbc=PBC, k=k_sector)
@@ -444,37 +520,63 @@ for i in range(len(basis[0])**2-l):
       raise RuntimeError("Trace numerically zero; cannot normalize")
   steady_states[i] = steady_state / tr
 
-print(steady_states.shape)
+print(steady_states.shape[0], " steady states normalized")
 
-neel_state = sum(1 << i for i in range(0, L, 2))
-index_neel = basis[1][neel_state][0]
-print(steady_state[index_neel, index_neel])
-print(index_neel)
+for steady_state in steady_states:
+  if PBC:  
+    neel_state = sum(1 << i for i in range(0, L, 2))
+    index_neel = basis[1][neel_state][0]
+    print("The overlap of Neel representative with the steady state is: ", np.abs(steady_state[index_neel, index_neel]))
+
+  else:
+    neel_state = sum(1 << i for i in range(0, L, 2))
+    neel_state_T = 2 * neel_state
+    index_neel = basis[1][neel_state]
+    index_neel_T = basis[1][neel_state_T]
+    print("The overlap of Neel state with the steady state is: ", np.abs(steady_state[index_neel, index_neel]))
+    print("The overlap of T-Neel state with the steady state is: ", np.abs(steady_state[index_neel_T, index_neel_T]))
+    print("The overlap with the coherence Neel and T-Neel is: ", steady_state[index_neel, index_neel_T], steady_state[index_neel_T, index_neel])
 
 # print("Eigenvalues of Lindbladian:")
 # print(eigenvalues_Lind)
 
 # print(Lind)
 
-plt.matshow(np.real(Lind), cmap='viridis')
-# plt.matshow(H, cmap='viridis')
-plt.colorbar()
+# plt.matshow(np.real(Lind), cmap='viridis')
+# # plt.matshow(H, cmap='viridis')
+# plt.colorbar()
 
-plt.show()
-plt.close()
+# plt.show()
+# plt.close()
 
 plt.plot(np.real(eigenvalues_Lind), np.imag(eigenvalues_Lind), 'o')
 plt.xlabel('Re')
 plt.ylabel('Im')
+plt.title('Eigenvalues of Lindbladian')
+plt.grid(True)
 plt.show()
 plt.close()
 
-plt.matshow(np.real(steady_state), cmap='viridis')
-# plt.matshow(H, cmap='viridis')
-plt.colorbar()
 
-plt.show()
-plt.close()
+for steady_state in steady_states:
+  plt.matshow(np.abs(steady_state), cmap='viridis')
+  plt.title("Steady state")
+  # plt.matshow(H, cmap='viridis')
+  plt.colorbar()
+
+  plt.show()
+  plt.close()
+
+##############################################################################
+########################## HEAT CURRENTS IN TIME #############################
+##############################################################################
+
+D_plus, D_minus = dissipators(L, basis[0], basis[1], gamma_plus, gamma_minus, pbc=PBC, k=k_sector)
+for steady_state in steady_states:
+  heat_current_p, heat_current_m = heat_current(steady_state, D_plus, D_minus, H)
+
+  print("Heat current plus in the steady state: ", heat_current_p)
+  print("Heat current plus in the steady state: ", heat_current_m)
 
 ##############################################################################
 ####################### MAGNETIZATION IN TIME ################################
@@ -486,21 +588,22 @@ rho_Neel = rho_neel_state(L, basis[0], basis[1], pbc=PBC, k=k_sector)
 rho_Neel_T = rho_neel_state_T(L, basis[0], basis[1], pbc=PBC, k=k_sector)
 rho_Neel_sup = rho_neel_state_sup(L, basis[0], basis[1], pbc=PBC, k=k_sector)
 
-t_final = 10
-dt = 0.01
+t_final = 20
+dt = 0.1
 
 time_N, magnetization_N = magnetization_in_time (Lind, rho_Neel, S_z, t_final, dt)
 time_N_T, magnetization_N_T = magnetization_in_time (Lind, rho_Neel_T, S_z, t_final, dt)
 time_N_sup, magnetization_N_sup = magnetization_in_time (Lind, rho_Neel_sup, S_z, t_final, dt)
 
-time_steady, magnetization_steady = magnetization_in_time (Lind, steady_states[0], S_z, t_final, dt)
-
-
 plt.figure(figsize=(8,5))
 plt.plot(time_N, magnetization_N, label="Neel", color='blue')
 plt.plot(time_N_T, magnetization_N_T, label="Neel_T", color='red')
 plt.plot(time_N_sup, magnetization_N_sup, label="Neel + Neel_T", color='green')
-plt.plot(time_steady, magnetization_steady, label="Steady state", color='orange')
+for steady_state in steady_states:
+  time_steady, magnetization_steady = magnetization_in_time (Lind, steady_state, S_z, t_final, dt)
+  plt.plot(time_steady, magnetization_steady, label="Steady state", color='orange')
+
+
 
 
 plt.xlabel("Time")
@@ -510,8 +613,6 @@ plt.legend()
 plt.grid(True)
 plt.show()
 plt.close()
-
-
 
 
 
