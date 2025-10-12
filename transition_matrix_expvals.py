@@ -51,20 +51,6 @@ def generation_basis(L, pbc=False):
   return rep_states, rep_index
 
 #############################################################################
-###################### GENERATION OF THE BASIS ##############################
-#############################################################################
-
-def fibonacci_basis(L, pbc=False):
-  states = []
-  for i in range(1 << L):
-    if i & (i >> 1) == 0:
-      if pbc and 2**0 & i and 2**(L-1) & i:
-        continue
-      else:
-        states.append(i)
-  return states
-
-#############################################################################
 ###################### GENERATION OF THE DISSIPATOR #########################
 #############################################################################
 
@@ -155,6 +141,34 @@ def avg_occupation (L, states, index, pbc=False, k=0):
   return n_avg/L
 
 #############################################################################
+##################### CORRELATION <Nj-1 Nj+1> ###############################
+#############################################################################
+
+def correlation (L, states, index, pbc=False, k=0):
+  n_n = np.zeros((len(states),len(states)))
+
+  if pbc:
+    for state in states:
+      for i in range(L):
+        # Corrected indexing for periodic boundaries
+        prev_site_bit = 1 << ((i - 1 + L) % L)
+        next_site_bit = 1 << ((i + 1) % L)
+        if state & prev_site_bit and state & next_site_bit:
+          n_n [ index[state][0], index[state][0]] += 1
+        # else:
+        #   n_avg [ index[state][0], index[state][0]] -= 1
+
+  else:
+    for state in states:
+      for i in range(1,L-1):
+        if state & (1 << (i-1)) and state & (1 << (i+1)):
+          n_n [ index[state], index[state]] += 1
+        # else:
+        #   n_avg [ index[state], index[state]] -= 1
+
+  return n_n/L
+
+#############################################################################
 ########################### MAGNETIZATION ###################################
 #############################################################################
 
@@ -183,13 +197,13 @@ def magnetization (L, states, index, pbc=False, k=0):
 #############################################################################
 #############################################################################
 
-L = 20
+L = 22
 PBC = True
 k_sector = 0
 basis = generation_basis(L, pbc=PBC)
 
-gamma_plus = 0.5
-gamma_minus = 0.01
+gamma_plus = 1.0
+gamma_minus = 1.5
 z =  gamma_plus / gamma_minus
 
 W = W_matrix(L, basis[0], basis[1], gamma_plus, gamma_minus, pbc=PBC, k=k_sector)
@@ -205,14 +219,29 @@ for i in range(len(eig_vals)):
     # print("Eigenvector:", eig_vecs[:,i])
 
 n_avg = avg_occupation(L, basis[0], basis[1], pbc=PBC, k=k_sector)
+n_n = correlation(L, basis[0], basis[1], pbc=PBC, k=k_sector)
 
 print("Z =", z)
-
-mpa_val = 2 * z / ( 1 + 4 * z + np.sqrt( 1 + 4 * z ))
 
 print(np.sum(pn_ss))
 
 exp_val_n_avg = np.trace( np.diag(pn_ss) @ n_avg )
+exp_val_n_n = np.trace( np.diag(pn_ss) @ n_n )
+
+mpa_val = 2 * z / ( 1 + 4 * z + np.sqrt( 1 + 4 * z ))
+
+print("Steady state occupation:", exp_val_n_avg)
+print("Steady state correlation:", exp_val_n_n)
+
+left_side = gamma_minus * exp_val_n_avg
+right_side = gamma_plus * (1 - 3 * exp_val_n_avg + exp_val_n_n)
+
+print(left_side, right_side)
+print("Difference:", left_side - right_side)
+
+
+print(np.sum(pn_ss))
+
 print("Steady state occupation:", exp_val_n_avg)
 print("Product Matrix value:", mpa_val)
 
