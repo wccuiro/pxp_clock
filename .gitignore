@@ -2,3 +2,4 @@
 *.toml
 *.npz
 /fig
+*.dat
