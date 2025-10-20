@@ -1,16 +1,12 @@
 import math
 import numpy as np
 
-import matplotlib.pyplot as plt
-
-from scipy.sparse import csr_matrix
-from scipy.sparse.linalg import eigs
 
 #############################################################################
 ###################### GENERATION OF THE BASIS ##############################
 #############################################################################
 
-def fibonacci_basis(L, pbc=False):
+def fibonacci_basis(L):
   states = []
   for i in range(1 << L):
     if i & (i >> 1) == 0:
@@ -21,7 +17,7 @@ def fibonacci_basis(L, pbc=False):
   return states
 
 def translationally_invariant_basis(L):
-  states= fibonacci_basis(L, pbc=True)
+  states= fibonacci_basis(L)
   rep_states = []
   rep_index = {}
 
@@ -39,53 +35,91 @@ def translationally_invariant_basis(L):
 
     rep_states.append(min_state)
 
-    rep_index[min_state] = [len(shifted_states)]
+    rep_index[min_state] = [((min_state << i) | (min_state >> (L - i))) & ((1 << L) - 1) for i in range(L)]
 
   return rep_states, rep_index
 
-def generation_basis(L, pbc=False):
-  if pbc:
+def generation_basis(L, t_inv=False):
+  if t_inv:
     rep_states, rep_index = translationally_invariant_basis(L)
     for i, s in enumerate(rep_states):
       rep_index[s].append(i)
-      rep_index[s] = rep_index[s][::-1]
   else:
-    rep_states = fibonacci_basis(L, pbc=False)
+    rep_states = fibonacci_basis(L)
     rep_index = {s: i for i,  s in enumerate(rep_states)}
   return rep_states, rep_index
+
+#############################################################################
+############################ JUMP OPERATORS #################################
+#############################################################################
+
+threshold = 1e-12
+def normalization_factor(L, states, k=0):
+  norm2 = 0
+  for j in range(L):
+    for i in range(L):
+      if states[j] == states[i]:
+        norm2 += np.exp(1j*2*np.pi*k*(j-i)/L)
+  norm2 = norm2 if np.abs(norm2) > threshold else 0
+  return np.sqrt(norm2)
+
+def dissipators_spin(rep_basis, full_basis, spin, t_inv=False, k=0):
+
+  if t_inv:
+    L_plus_spin = np.zeros((len(rep_basis),len(rep_basis)), dtype=complex)
+    L_minus_spin = np.zeros((len(rep_basis),len(rep_basis)), dtype=complex)
+
+    for init in rep_basis:
+      for target in rep_basis:
+        norm_init = normalization_factor(L, full_basis[init], k)
+        norm_target = normalization_factor(L, full_basis[target], k)
+        # print(norm_init)
+
+        if norm_init > threshold and norm_target > threshold:
+          for i in range(L):
+            for t in range(L):
+
+              if ((full_basis[init][i] >> ((spin-1)%L)) & 1) == 0 and ((full_basis[init][i] >> ((spin+1)%L)) & 1) == 0:
+                state_p = full_basis[init][i] ^ (1 << spin)
+                
+                if state_p & 1<<spin and state_p == full_basis[target][t]:
+                  # print(full_basis[init][i],full_basis[target][t])
+                  L_plus_spin[full_basis[target][-1],full_basis[init][-1]] += np.exp(1j*2*np.pi*k*(i-t)/L) / ( norm_init * norm_target)
+
+                if not (state_p & 1<<spin) and state_p == full_basis[target][t]:
+                  L_minus_spin[full_basis[target][-1],full_basis[init][-1]] += np.exp(1j*2*np.pi*k*(i-t)/L) / ( norm_init * norm_target)
+
+  else:
+    L_plus_spin = np.zeros((len(rep_basis),len(rep_basis)), dtype=complex)
+    L_minus_spin = np.zeros((len(rep_basis),len(rep_basis)), dtype=complex)
+  
+    for state in rep_basis:
+      if ((state >> ((spin-1)%L)) & 1) == 0 and ((state >> ((spin+1)%L)) & 1) == 0:
+        state_p = state ^ (1 << spin)
+        d = 0
+        if state & 1<<spin:
+          L_minus_spin [ full_basis[state_p], full_basis[state]] += 1
+          # print("gamma_minus")
+        else:
+          L_plus_spin [ full_basis[state_p], full_basis[state]] += 1
+          # print("gamma_plus")
+
+  
+  return L_plus_spin, L_minus_spin
 
 #############################################################################
 ###################### GENERATION OF THE DISSIPATOR #########################
 #############################################################################
 
-def W_matrix(L, states, index, gamma_plus, gamma_minus, pbc=False, k=0):
+def W_matrix(L, states, index, gamma_plus, gamma_minus, t_inv=False, k=0):
   W_minus = np.zeros((len(states), len(states)), dtype=complex)
   W_plus = np.zeros((len(states), len(states)), dtype=complex)
 
-  if pbc:
+  if t_inv:
 
     for i in range(L):
 
-      L_minus_i = np.zeros((len(states), len(states)), dtype=complex)
-      L_plus_i = np.zeros((len(states), len(states)), dtype=complex)
-
-      for state in states:
-        if ((state >> ((i-1)%L)) & 1) == 0 and ((state >> ((i+1)%L)) & 1) == 0:
-          state_i_p = state ^ (1 << i)
-          state_p = state_i_p
-          d = 0
-          for j in range(L):
-            state_ii_p = ((state_i_p << j) | (state_i_p >> (L - j))) & ((1 << L) - 1)
-
-            if state_ii_p < state_p:
-              state_p = state_ii_p
-              d = j
-          if state & 1<<i:
-            L_minus_i [ index[state_p][0], index[state][0]] += np.exp(-1j * 2 * np.pi * k * d / L) * np.sqrt(index[state][1] / index[state_p][1] )
-            # print("gamma_minus")
-          else:
-            L_plus_i [ index[state_p][0], index[state][0]] += np.exp(-1j * 2 * np.pi * k * d / L) * np.sqrt(index[state][1] / index[state_p][1] )
-            # print("gamma_plus")
+      L_plus_i, L_minus_i = dissipators_spin(states, index, i, t_inv, k=k)
 
       W_minus += np.multiply(L_minus_i, L_minus_i.conj()) - np.diag(np.diag(L_minus_i.conj().T @ L_minus_i))
       W_plus += np.multiply(L_plus_i, L_plus_i.conj()) - np.diag(np.diag(L_plus_i.conj().T @ L_plus_i))
@@ -95,21 +129,9 @@ def W_matrix(L, states, index, gamma_plus, gamma_minus, pbc=False, k=0):
     return W
 
   else:
-    for i in range(1,L-1):
+    for i in range(L):
 
-      L_minus_i = np.zeros((len(states), len(states)), dtype=complex)
-      L_plus_i = np.zeros((len(states), len(states)), dtype=complex)
-
-      for state in states:
-        if ((state >> (i-1)) & 1) == 0 and ((state >> (i+1)) & 1) == 0:
-          state_p = state ^ (1 << i)
-          d = 0
-          if state & 1<<i:
-            L_minus_i [ index[state_p], index[state]] += 1
-            # print("gamma_minus")
-          else:
-            L_plus_i [ index[state_p], index[state]] += 1
-            # print("gamma_plus")
+      L_plus_i, L_minus_i = dissipators_spin(states, index, i, t_inv, k=k)
 
       W_minus += np.multiply(L_minus_i, L_minus_i.conj()) - np.diag(np.diag(L_minus_i.conj().T @ L_minus_i))
       W_plus += np.multiply(L_plus_i, L_plus_i.conj()) - np.diag(np.diag(L_plus_i.conj().T @ L_plus_i))
@@ -122,34 +144,15 @@ def W_matrix(L, states, index, gamma_plus, gamma_minus, pbc=False, k=0):
 ############################## EXP VAL EEE OPERATOR #########################
 #############################################################################
 
-def EEE_EDE_matrix(L, states, index, gamma_plus, gamma_minus, pbc=False, k=0):
+def EEE_EDE_matrix(L, states, index, gamma_plus, gamma_minus, t_inv=False, k=0):
   EEE_matrix = np.zeros((len(states), len(states)), dtype=complex)
   EDE_matrix = np.zeros((len(states), len(states)), dtype=complex)
 
-  if pbc:
+  if t_inv:
 
     for i in range(L):
 
-      L_minus_i = np.zeros((len(states), len(states)), dtype=complex)
-      L_plus_i = np.zeros((len(states), len(states)), dtype=complex)
-
-      for state in states:
-        if ((state >> ((i-1)%L)) & 1) == 0 and ((state >> ((i+1)%L)) & 1) == 0:
-          state_i_p = state ^ (1 << i)
-          state_p = state_i_p
-          d = 0
-          for j in range(L):
-            state_ii_p = ((state_i_p << j) | (state_i_p >> (L - j))) & ((1 << L) - 1)
-
-            if state_ii_p < state_p:
-              state_p = state_ii_p
-              d = j
-          if state & 1<<i:
-            L_minus_i [ index[state_p][0], index[state][0]] += np.exp(-1j * 2 * np.pi * k * d / L) * np.sqrt(index[state][1] / index[state_p][1] )
-            # print("gamma_minus")
-          else:
-            L_plus_i [ index[state_p][0], index[state][0]] += np.exp(-1j * 2 * np.pi * k * d / L) * np.sqrt(index[state][1] / index[state_p][1] )
-            # print("gamma_plus")
+      L_plus_i, L_minus_i = dissipators_spin(states, index, i, t_inv, k=k)
 
       EEE_matrix += L_plus_i.conj().T @ L_plus_i
       EDE_matrix += L_minus_i.conj().T @ L_minus_i
@@ -159,19 +162,7 @@ def EEE_EDE_matrix(L, states, index, gamma_plus, gamma_minus, pbc=False, k=0):
   else:
     for i in range(L):
 
-      L_minus_i = np.zeros((len(states), len(states)), dtype=complex)
-      L_plus_i = np.zeros((len(states), len(states)), dtype=complex)
-
-      for state in states:
-        if ((state >> (i-1)%L) & 1) == 0 and ((state >> (i+1)%L) & 1) == 0:
-          state_p = state ^ (1 << i)
-          d = 0
-          if state & 1<<i:
-            L_minus_i [ index[state_p], index[state]] += 1
-            # print("gamma_minus")
-          else:
-            L_plus_i [ index[state_p], index[state]] += 1
-            # print("gamma_plus")
+      L_plus_i, L_minus_i = dissipators_spin(states, index, i, t_inv, k=k)
 
       EEE_matrix += L_plus_i.conj().T @ L_plus_i
       EDE_matrix += L_minus_i.conj().T @ L_minus_i
@@ -183,29 +174,14 @@ def EEE_EDE_matrix(L, states, index, gamma_plus, gamma_minus, pbc=False, k=0):
 ########################## AVG OCCUPATION ###################################
 #############################################################################
 
-def avg_occupation (L, states, index, pbc=False, k=0):
+def avg_occupation (L, states, index, t_inv=False, k=0):
   n_avg = np.zeros((len(states),len(states)),dtype=complex)
 
-  if pbc:
+  if t_inv:
 
     for i in range(L):
 
-      L_minus_i = np.zeros((len(states), len(states)), dtype=complex)
-
-      for state in states:
-        if ((state >> ((i-1)%L)) & 1) == 0 and ((state >> ((i+1)%L)) & 1) == 0:
-          state_i_p = state ^ (1 << i)
-          state_p = state_i_p
-          d = 0
-          for j in range(L):
-            state_ii_p = ((state_i_p << j) | (state_i_p >> (L - j))) & ((1 << L) - 1)
-
-            if state_ii_p < state_p:
-              state_p = state_ii_p
-              d = j
-          if state & 1<<i:
-            L_minus_i [ index[state_p][0], index[state][0]] += np.exp(-1j * 2 * np.pi * k * d / L) * np.sqrt(index[state][1] / index[state_p][1] )
-            # print("gamma_minus")
+      L_plus_i, L_minus_i = dissipators_spin(states, index, i, t_inv, k=k)
 
       n_avg += L_minus_i.conj().T @ L_minus_i
 
@@ -214,15 +190,7 @@ def avg_occupation (L, states, index, pbc=False, k=0):
   else:
     for i in range(L):
 
-      L_minus_i = np.zeros((len(states), len(states)), dtype=complex)
-
-      for state in states:
-        if ((state >> ((i-1)%L)) & 1) == 0 and ((state >> ((i+1)%L)) & 1) == 0:
-          state_p = state ^ (1 << i)
-          d = 0
-          if state & 1<<i:
-            L_minus_i [ index[state_p], index[state]] += 1
-            # print("gamma_minus")
+      L_plus_i, L_minus_i = dissipators_spin(states, index, i, t_inv, k=k)
 
       n_avg += L_minus_i.conj().T @ L_minus_i
 
@@ -232,48 +200,18 @@ def avg_occupation (L, states, index, pbc=False, k=0):
 ##################### CORRELATION <Nj-1 Nj+1> ###############################
 #############################################################################
 
-def correlation (L, states, index, pbc=False, k=0):
+def correlation (L, states, index, t_inv=False, k=0):
   n_n = np.zeros((len(states),len(states)),dtype=complex)
 
-  n_i_e = np.eye(len(states))
-  n_i_o = np.eye(len(states))
-  old_e = 0
-  old_o = 1
-  if pbc:
+  if t_inv:
 
-    for i in range(L+2):
+    for i in range(L):
 
-      L_minus_i = np.zeros((len(states), len(states)), dtype=complex)
+      L_plus_i, L_minus_ib = dissipators_spin(states, index, (i-1)%L, t_inv, k=k)
+      L_plus_i, L_minus_ia = dissipators_spin(states, index, (i+1)%L, t_inv, k=k)
 
-      for state in states:
-        if ((state >> ((i-1)%L)) & 1) == 0 and ((state >> ((i+1)%L)) & 1) == 0:
-          state_i_p = state ^ (1 << i%L)
-          state_p = state_i_p
-          d = 0
-          for j in range(L):
-            state_ii_p = ((state_i_p << j) | (state_i_p >> (L - j))) & ((1 << L) - 1)
-
-            if state_ii_p < state_p:
-              state_p = state_ii_p
-              d = j
-          if state & 1<<(i%L):
-            L_minus_i [ index[state_p][0], index[state][0]] += np.exp(-1j * 2 * np.pi * k * d / L) * np.sqrt(index[state][1] / index[state_p][1] )
-            # print("gamma_minus")
-
-      n_i = L_minus_i.conj().T @ L_minus_i
+      n_n += L_minus_ib.conj().T @ L_minus_ib @ L_minus_ia.conj().T @ L_minus_ia
       
-      if i%2 == 0:
-        if i != 0:
-          n_n += n_i_e @ n_i
-          # print(old_e%L,i%L)
-        n_i_e = n_i
-        old_e = i
-      else:
-        if i != 1:
-          n_n += n_i_o @ n_i
-          # print(old_o%L,i%L)
-        n_i_o = n_i
-        old_o = i
 
     return n_n/L
 
@@ -293,93 +231,41 @@ def correlation (L, states, index, pbc=False, k=0):
 ##################### CORRELATION <EEEEE> ###############################
 #############################################################################
 
-def correlation_2 (L, states, index, pbc=False, k=0):
+def correlation_2 (L, states, index, t_inv=False, k=0):
   n_n = np.zeros((len(states),len(states)),dtype=complex)
 
-  n_i_e = np.eye(len(states))
-  n_i_o = np.eye(len(states))
-  old_e = 0
-  old_o = 1
-  if pbc:
+  if t_inv:
 
-    for i in range(L+2):
+    for i in range(L):
 
-      L_minus_i = np.zeros((len(states), len(states)), dtype=complex)
+      L_plus_ib, L_minus_ib = dissipators_spin(states, index, (i-1)%L, t_inv, k=k)
+      L_plus_ia, L_minus_ia = dissipators_spin(states, index, (i+1)%L, t_inv, k=k)
 
-      for state in states:
-        if ((state >> ((i-1)%L)) & 1) == 0 and ((state >> ((i+1)%L)) & 1) == 0:
-          state_i_p = state ^ (1 << i%L)
-          state_p = state_i_p
-          d = 0
-          for j in range(L):
-            state_ii_p = ((state_i_p << j) | (state_i_p >> (L - j))) & ((1 << L) - 1)
-
-            if state_ii_p < state_p:
-              state_p = state_ii_p
-              d = j
-          if not state & 1<<(i%L):
-            L_minus_i [ index[state_p][0], index[state][0]] += np.exp(-1j * 2 * np.pi * k * d / L) * np.sqrt(index[state][1] / index[state_p][1] )
-            # print("gamma_minus")
-
-      n_i = L_minus_i.conj().T @ L_minus_i
-      
-      if i%2 == 0:
-        if i != 0:
-          n_n += n_i_e @ n_i
-          # print(old_e%L,i%L)
-        n_i_e = n_i
-        old_e = i
-      else:
-        if i != 1:
-          n_n += n_i_o @ n_i
-          # print(old_o%L,i%L)
-        n_i_o = n_i
-        old_o = i
+      n_n += L_plus_ib.conj().T @ L_plus_ib @ L_plus_ia.conj().T @ L_plus_ia
 
     return n_n/L
 
   else:
-    for i in range(1,L+1):
+    for i in range(0,L+2):
 
-      L_minus_i = np.zeros((len(states), len(states)), dtype=complex)
+      L_plus_ib, L_minus_ib = dissipators_spin(states, index, (i-1)%L, t_inv, k=k)
+      L_plus_ia, L_minus_ia = dissipators_spin(states, index, (i+1)%L, t_inv, k=k)
 
-      for state in states:
-        if ((state >> ((i-1)%L)) & 1) == 0 and ((state >> ((i+1)%L)) & 1) == 0:
-          state_p = state ^ (1 << i%L)
-          if state & 1<<(i%L):
-            L_minus_i [ index[state_p], index[state]] += 1
-            # print("gamma_minus")
-
-      n_i = L_minus_i.conj().T @ L_minus_i
-      
-      if i%2 == 0:
-        if i != 0:
-          n_n += n_i_e @ n_i
-          # print(old_e%L,i%L)
-        n_i_e = n_i
-        old_e = i
-      else:
-        if i != 1:
-          n_n += n_i_o @ n_i
-          # print(old_o%L,i%L)
-        n_i_o = n_i
-        old_o = i
+      n_n += L_plus_ib.conj().T @ L_plus_ib @ L_plus_ia.conj().T @ L_plus_ia
 
     return n_n/L
+
 #############################################################################
 ########################### MAGNETIZATION ###################################
 #############################################################################
 
-def magnetization (L, states, index, pbc=False, k=0):
+def magnetization (L, states, index, t_inv=False, k=0):
   S_z = np.zeros((len(states),len(states)))
 
-  if pbc:
-    for state in states:
-      for i in range(L):
-        if state & (1 << i):
-          S_z [ index[state][0], index[state][0]] += 1
-        else:
-          S_z [ index[state][0], index[state][0]] -= 1
+  if t_inv:
+    for i in range(L):
+      L_plus_i, L_minus_i = dissipators_spin(states, index, i, t_inv, k=k)
+      S_z += L_minus_i.conj().T @ L_minus_i - L_plus_i.conj().T @ L_plus_i
 
   else:
     for state in states:
@@ -454,9 +340,9 @@ def analytical_EDEDE(L, gamma_plus, gamma_minus):
 
 
 L = 10
-PBC = True
+T_INV = True
 k_sector = 0
-basis = generation_basis(L, pbc=PBC)
+basis = generation_basis(L, t_inv=T_INV)
 
 # for i in basis[0]:
 #   print(f"{i:0{L}b}")
@@ -465,8 +351,7 @@ gamma_plus = 1.0
 gamma_minus = 1.5
 z =  gamma_plus / gamma_minus
 
-W = W_matrix(L, basis[0], basis[1], gamma_plus, gamma_minus, pbc=PBC, k=k_sector)
-
+W = W_matrix(L, basis[0], basis[1], gamma_plus, gamma_minus, t_inv=T_INV, k=k_sector)
 
 
 # # Convert the dense matrix to a CSR sparse matrix
@@ -499,11 +384,11 @@ print("(steady states) + (non steady states) = base")
 print(ss,"+" , non_ss, "=", ss+non_ss, "=", len(basis[0]))
 print("-------------------------------")
 
-n_avg = avg_occupation(L, basis[0], basis[1], pbc=PBC, k=k_sector)
-n_n = correlation(L, basis[0], basis[1], pbc=PBC, k=k_sector)
-n_n_2 = correlation_2(L, basis[0], basis[1], pbc=PBC, k=k_sector)
+n_avg = avg_occupation(L, basis[0], basis[1], t_inv=T_INV, k=k_sector)
+n_n = correlation(L, basis[0], basis[1], t_inv=T_INV, k=k_sector)
+n_n_2 = correlation_2(L, basis[0], basis[1], t_inv=T_INV, k=k_sector)
 
-EEE_matrix, EDE_matrix = EEE_EDE_matrix(L, basis[0], basis[1], gamma_plus, gamma_minus, pbc=PBC, k=k_sector)
+EEE_matrix, EDE_matrix = EEE_EDE_matrix(L, basis[0], basis[1], gamma_plus, gamma_minus, t_inv=T_INV, k=k_sector)
 
 for i in pn_ss_set:
   print("Control sum 2:", np.sum(i))
@@ -512,6 +397,8 @@ acc_EDE = 0
 acc_EDEDE = 0
 
 for pn_ss in pn_ss_set:
+  print("-------------------------------")
+  print("---------- NUMERICAL ----------")
   print("-------------------------------")
 
   exp_val_n_avg = np.trace( np.diag(pn_ss) @ n_avg )
@@ -544,10 +431,12 @@ for pn_ss in pn_ss_set:
   an_val_E = analytical_EEE(L, gamma_plus, gamma_minus)
   an_val_n_n = analytical_EDEDE(L, gamma_plus, gamma_minus)
 
+  print("-------------------------------")
+  print("---------- ANALYTICAL ---------")
+  print("-------------------------------")
 
-  print("Steady state occupation:", exp_val_n_avg, exp_val_EDE)
 
-  print("Steady state correlation:", exp_val_n_n, an_val_n_n)
+  print("Steady state correlation:", an_val_n_n)
   print("Steady state correlation analytical:", (1 + 3*z)/z * an_val - 1, an_val_n_n)
   print("Steady state correlation expected:", (1 + 3*z)/z * exp_val_n_avg - 1)
 
@@ -556,19 +445,28 @@ for pn_ss in pn_ss_set:
   right_side = z * (1 - 3 * exp_val_n_avg + exp_val_n_n)
 
   print(left_side, right_side)
-  print("Difference:", left_side - right_side)
+  print("Difference Identity:", left_side - right_side)
 
 
   # print(np.sum(pn_ss))
+  print("-------------------------------")
+  print("---------- COMPARING ----------")
+  print("-------------------------------")
 
-  print("Steady state occupation:", exp_val_n_avg)
-  print("Analytical occupation:", an_val, exp_val_EDE)
-  print("Analytical EEE:", an_val_E, exp_val_EEE)
+
+  print("Steady state occupation:", an_val, exp_val_EDE)
+  print("Steady state EEE:", an_val_E, exp_val_EEE)
+
+  print("-----------------------------------------")
+  print("---------- THERMODYNAMIC VALUE ----------")
+  print("-----------------------------------------")
+
   print("Product Matrix value:", mpa_val)
 
-  print("Relative error:", np.abs(exp_val_n_avg - mpa_val) / mpa_val)
+  print("Relative error with numerical:", np.abs(exp_val_n_avg - mpa_val) / mpa_val)
+  print("Relative error with analytical:", np.abs(an_val - mpa_val) / mpa_val)
 
-print("-------------------------------")
-print("Accumulated EDE:", acc_EDE/3)
-print("Accumulated EDEDE:", acc_EDEDE/3)
-print("Steady state correlation accumulated:", (1 + 3*z)/z * acc_EDE/3-1, acc_EDEDE/3)
+# print("-------------------------------")
+# print("Accumulated EDE:", acc_EDE)
+# print("Accumulated EDEDE:", acc_EDEDE)
+# print("Steady state correlation accumulated:", (1 + 3*z)/z * acc_EDE-1, acc_EDEDE)
