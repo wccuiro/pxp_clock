@@ -316,7 +316,7 @@ def analytical_EEE(L, gamma_plus, gamma_minus):
   return num/denom
 
 #############################################################################
-############################# ANALITYCAL EDEDE ################################
+############################# ANALITYCAL EDEDE ##############################
 #############################################################################
 
 def analytical_EDEDE(L, gamma_plus, gamma_minus):
@@ -335,11 +335,11 @@ def analytical_EDEDE(L, gamma_plus, gamma_minus):
   return num/denom
 
 #############################################################################
-#############################################################################
+##################### TRACE IN REPRESENTATIVE BASIS #########################
 #############################################################################
 
 
-L = 10
+L = 12
 T_INV = True
 k_sector = 0
 basis = generation_basis(L, t_inv=T_INV)
@@ -350,6 +350,7 @@ basis = generation_basis(L, t_inv=T_INV)
 gamma_plus = 1.0
 gamma_minus = 1.5
 z =  gamma_plus / gamma_minus
+
 
 W = W_matrix(L, basis[0], basis[1], gamma_plus, gamma_minus, t_inv=T_INV, k=k_sector)
 
@@ -436,13 +437,13 @@ for pn_ss in pn_ss_set:
   print("-------------------------------")
 
 
-  print("Steady state correlation:", an_val_n_n)
+  print("Steady state occupation:", an_val)
   print("Steady state correlation analytical:", (1 + 3*z)/z * an_val - 1, an_val_n_n)
-  print("Steady state correlation expected:", (1 + 3*z)/z * exp_val_n_avg - 1)
+  print("Steady state correlation expected:", (1 + 3*z)/z * an_val - 1)
 
 
-  left_side = exp_val_n_avg
-  right_side = z * (1 - 3 * exp_val_n_avg + exp_val_n_n)
+  left_side = an_val
+  right_side = z * (1 - 3 * an_val + an_val_n_n)
 
   print(left_side, right_side)
   print("Difference Identity:", left_side - right_side)
