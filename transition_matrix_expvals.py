@@ -246,7 +246,7 @@ def correlation_2 (L, states, index, t_inv=False, k=0):
     return n_n/L
 
   else:
-    for i in range(0,L+2):
+    for i in range(L):
 
       L_plus_ib, L_minus_ib = dissipators_spin(states, index, (i-1)%L, t_inv, k=k)
       L_plus_ia, L_minus_ia = dissipators_spin(states, index, (i+1)%L, t_inv, k=k)
