@@ -1,6 +1,7 @@
 import math
 import numpy as np
 
+import matplotlib.pyplot as plt
 
 #############################################################################
 ###################### GENERATION OF THE BASIS ##############################
@@ -338,136 +339,176 @@ def analytical_EDEDE(L, gamma_plus, gamma_minus):
 ##################### TRACE IN REPRESENTATIVE BASIS #########################
 #############################################################################
 
+def main(gamma_plus, gamma_minus):
+  global L
+  L = 12
+  T_INV = False
+  k_sector = 0
+  basis = generation_basis(L, t_inv=T_INV)
 
-L = 12
-T_INV = True
-k_sector = 0
-basis = generation_basis(L, t_inv=T_INV)
+  # for i in basis[0]:
+  #   print(f"{i:0{L}b}")
 
-# for i in basis[0]:
-#   print(f"{i:0{L}b}")
-
-gamma_plus = 1.0
-gamma_minus = 1.5
-z =  gamma_plus / gamma_minus
-
-
-W = W_matrix(L, basis[0], basis[1], gamma_plus, gamma_minus, t_inv=T_INV, k=k_sector)
+  # gamma_plus = 1.0
+  # gamma_minus = 1.5
+  z =  gamma_plus / gamma_minus
 
 
-# # Convert the dense matrix to a CSR sparse matrix
-# W_sparse = csr_matrix(W)
-
-# # You can now use the sparse solver
-# eigenvalues, eigenvectors = eigs(W_sparse, k=1, which='SR', sigma=1e-9)
-
-eig_vals, eig_vecs = np.linalg.eig(W)
-
-ss = 0
-non_ss = 0
-pn_ss_set = []
-for i in range(len(eig_vals)):
-  if np.isclose(eig_vals[i], 0):
-    pn_ss = 0.5 * ( eig_vecs[:,i] / np.sum(eig_vecs[:,i]) + (eig_vecs[:,i] / np.sum(eig_vecs[:,i])).conj() )
-    pn_ss = pn_ss.real
-    pn_ss_set.append(pn_ss/np.sum(pn_ss))
-    print("Control sum:", np.sum(pn_ss.imag))
-    ss += 1
-  else:
-    non_ss += 1
-    # print("Eigenvalue:", eig_vals[i])
-    # print("Eigenvector:", eig_vecs[:,i])
-
-pn_ss_set = np.array(pn_ss_set).reshape(-1, len(basis[0]))
-
-print("-------------------------------")
-print("(steady states) + (non steady states) = base")
-print(ss,"+" , non_ss, "=", ss+non_ss, "=", len(basis[0]))
-print("-------------------------------")
-
-n_avg = avg_occupation(L, basis[0], basis[1], t_inv=T_INV, k=k_sector)
-n_n = correlation(L, basis[0], basis[1], t_inv=T_INV, k=k_sector)
-n_n_2 = correlation_2(L, basis[0], basis[1], t_inv=T_INV, k=k_sector)
-
-EEE_matrix, EDE_matrix = EEE_EDE_matrix(L, basis[0], basis[1], gamma_plus, gamma_minus, t_inv=T_INV, k=k_sector)
-
-for i in pn_ss_set:
-  print("Control sum 2:", np.sum(i))
-
-acc_EDE = 0
-acc_EDEDE = 0
-
-for pn_ss in pn_ss_set:
-  print("-------------------------------")
-  print("---------- NUMERICAL ----------")
-  print("-------------------------------")
-
-  exp_val_n_avg = np.trace( np.diag(pn_ss) @ n_avg )
-  exp_val_n_n = np.trace( np.diag(pn_ss) @ n_n )
-  exp_val_n_n_2 = np.trace( np.diag(pn_ss) @ n_n_2 )
+  W = W_matrix(L, basis[0], basis[1], gamma_plus, gamma_minus, t_inv=T_INV, k=k_sector)
 
 
-  exp_val_EDE = np.trace( np.diag(pn_ss) @ EDE_matrix )
-  exp_val_EEE = np.trace( np.diag(pn_ss) @ EEE_matrix )
-  
-  acc_EDE += exp_val_n_avg.real
-  print("Occupation <n>:", exp_val_n_avg, exp_val_EDE)
+  # # Convert the dense matrix to a CSR sparse matrix
+  # W_sparse = csr_matrix(W)
 
-  print("gamma_minus * <EDE> =", gamma_minus * exp_val_EDE)
-  print("gamma_plus * <EEE>  =", gamma_plus * exp_val_EEE)
+  # # You can now use the sparse solver
+  # eigenvalues, eigenvectors = eigs(W_sparse, k=1, which='SR', sigma=1e-9)
 
-  print("Correlation <EDEDE>:", exp_val_n_n)
-  
-  acc_EDEDE += exp_val_n_n.real
-  
-  print("Correlation <EEEEE> * z**2:", exp_val_n_n_2 * z**2)
+  eig_vals, eig_vecs = np.linalg.eig(W)
 
+  ss = 0
+  non_ss = 0
+  pn_ss_set = []
+  for i in range(len(eig_vals)):
+    if np.isclose(eig_vals[i], 0):
+      pn_ss = 0.5 * ( eig_vecs[:,i] / np.sum(eig_vecs[:,i]) + (eig_vecs[:,i] / np.sum(eig_vecs[:,i])).conj() )
+      pn_ss = pn_ss.real
+      pn_ss_set.append(pn_ss/np.sum(pn_ss))
+      print("Control sum:", np.sum(pn_ss.imag))
+      ss += 1
+    else:
+      non_ss += 1
+      # print("Eigenvalue:", eig_vals[i])
+      # print("Eigenvector:", eig_vecs[:,i])
 
-  print("Difference:", gamma_minus * exp_val_EDE - gamma_plus * exp_val_EEE)
-  print("Sum:" , exp_val_EDE + exp_val_EEE)
-
-  mpa_val = 2 * z / ( 1 + 4 * z + np.sqrt( 1 + 4 * z ))
-
-  an_val = analytical_occupation(L, gamma_plus, gamma_minus)
-  an_val_E = analytical_EEE(L, gamma_plus, gamma_minus)
-  an_val_n_n = analytical_EDEDE(L, gamma_plus, gamma_minus)
+  pn_ss_set = np.array(pn_ss_set).reshape(-1, len(basis[0]))
 
   print("-------------------------------")
-  print("---------- ANALYTICAL ---------")
+  print("(steady states) + (non steady states) = base")
+  print(ss,"+" , non_ss, "=", ss+non_ss, "=", len(basis[0]))
   print("-------------------------------")
 
+  n_avg = avg_occupation(L, basis[0], basis[1], t_inv=T_INV, k=k_sector)
+  n_n = correlation(L, basis[0], basis[1], t_inv=T_INV, k=k_sector)
+  n_n_2 = correlation_2(L, basis[0], basis[1], t_inv=T_INV, k=k_sector)
 
-  print("Steady state occupation:", an_val)
-  print("Steady state correlation analytical:", (1 + 3*z)/z * an_val - 1, an_val_n_n)
-  print("Steady state correlation expected:", (1 + 3*z)/z * an_val - 1)
+  EEE_matrix, EDE_matrix = EEE_EDE_matrix(L, basis[0], basis[1], gamma_plus, gamma_minus, t_inv=T_INV, k=k_sector)
+
+  for i in pn_ss_set:
+    print("Control sum 2:", np.sum(i))
+
+  acc_EDE = 0
+  acc_EDEDE = 0
+
+  for pn_ss in pn_ss_set:
+    print("-------------------------------")
+    print("---------- NUMERICAL ----------")
+    print("-------------------------------")
+
+    exp_val_n_avg = np.trace( np.diag(pn_ss) @ n_avg )
+    exp_val_n_n = np.trace( np.diag(pn_ss) @ n_n )
+    exp_val_n_n_2 = np.trace( np.diag(pn_ss) @ n_n_2 )
 
 
-  left_side = an_val
-  right_side = z * (1 - 3 * an_val + an_val_n_n)
+    exp_val_EDE = np.trace( np.diag(pn_ss) @ EDE_matrix )
+    exp_val_EEE = np.trace( np.diag(pn_ss) @ EEE_matrix )
+    
+    acc_EDE += exp_val_n_avg.real
+    print("Occupation <n>:", exp_val_n_avg, exp_val_EDE)
 
-  print(left_side, right_side)
-  print("Difference Identity:", left_side - right_side)
+    print("gamma_minus * <EDE> =", gamma_minus * exp_val_EDE)
+    print("gamma_plus * <EEE>  =", gamma_plus * exp_val_EEE)
+
+    print("Correlation <EDEDE>:", exp_val_n_n)
+    
+    acc_EDEDE += exp_val_n_n.real
+    
+    print("Correlation <EEEEE> * z**2:", exp_val_n_n_2 * z**2)
 
 
-  # print(np.sum(pn_ss))
-  print("-------------------------------")
-  print("---------- COMPARING ----------")
-  print("-------------------------------")
+    print("Difference:", gamma_minus * exp_val_EDE - gamma_plus * exp_val_EEE)
+    print("Sum:" , exp_val_EDE + exp_val_EEE)
+
+    mpa_val = 2 * z / ( 1 + 4 * z + np.sqrt( 1 + 4 * z ))
+
+    an_val = analytical_occupation(L, gamma_plus, gamma_minus)
+    an_val_E = analytical_EEE(L, gamma_plus, gamma_minus)
+    an_val_n_n = analytical_EDEDE(L, gamma_plus, gamma_minus)
+
+    print("-------------------------------")
+    print("---------- ANALYTICAL ---------")
+    print("-------------------------------")
 
 
-  print("Steady state occupation:", an_val, exp_val_EDE)
-  print("Steady state EEE:", an_val_E, exp_val_EEE)
+    print("Steady state occupation:", an_val)
+    print("Steady state correlation analytical:", (1 + 3*z)/z * an_val - 1, an_val_n_n)
+    print("Steady state correlation expected:", (1 + 3*z)/z * an_val - 1)
 
-  print("-----------------------------------------")
-  print("---------- THERMODYNAMIC VALUE ----------")
-  print("-----------------------------------------")
 
-  print("Product Matrix value:", mpa_val)
+    left_side = an_val
+    right_side = z * (1 - 3 * an_val + an_val_n_n)
 
-  print("Relative error with numerical:", np.abs(exp_val_n_avg - mpa_val) / mpa_val)
-  print("Relative error with analytical:", np.abs(an_val - mpa_val) / mpa_val)
+    print(left_side, right_side)
+    print("Difference Identity:", left_side - right_side)
 
-# print("-------------------------------")
-# print("Accumulated EDE:", acc_EDE)
-# print("Accumulated EDEDE:", acc_EDEDE)
-# print("Steady state correlation accumulated:", (1 + 3*z)/z * acc_EDE-1, acc_EDEDE)
+
+    # print(np.sum(pn_ss))
+    print("-------------------------------")
+    print("---------- COMPARING ----------")
+    print("-------------------------------")
+
+
+    print("Steady state occupation:", an_val, exp_val_EDE)
+    print("Steady state EEE:", an_val_E, exp_val_EEE)
+
+    print("-----------------------------------------")
+    print("---------- THERMODYNAMIC VALUE ----------")
+    print("-----------------------------------------")
+
+    print("Product Matrix value:", mpa_val)
+
+    print("Relative error with numerical:", np.abs(exp_val_n_avg - mpa_val) / mpa_val)
+    print("Relative error with analytical:", np.abs(an_val - mpa_val) / mpa_val)
+
+  # print("-------------------------------")
+  # print("Accumulated EDE:", acc_EDE)
+  # print("Accumulated EDEDE:", acc_EDEDE)
+  # print("Steady state correlation accumulated:", (1 + 3*z)/z * acc_EDE-1, acc_EDEDE)
+
+  return exp_val_n_avg, exp_val_n_n, an_val, an_val_n_n, mpa_val, (1 + 3*z)/z * mpa_val -1
+
+g_vals =  np.linspace(1e4, 1e6, 100)
+
+num_n, num_n_n, an_n, an_n_n, large_N_n, large_N_n_n = [], [], [], [], [], []
+
+for g in g_vals:
+  gamma_plus = g
+  gamma_minus = 1.0
+  results = main(gamma_plus, gamma_minus)
+  num_n.append(results[0].real)
+  num_n_n.append(results[1].real)
+  an_n.append(results[2].real)
+  an_n_n.append(results[3].real)
+  large_N_n.append(results[4].real)
+  large_N_n_n.append(results[5].real)
+
+plt.plot(g_vals, num_n, '*-', label="Numerical <n>", color='blue')
+plt.plot(g_vals, an_n, label="Analytical <n>", color='orange', linestyle='dashed')
+plt.plot(g_vals, large_N_n, label="Thermodynamic <n>", color='green', linestyle='dotted')
+plt.xlabel("g")
+plt.ylabel("<n>")
+plt.legend()
+plt.title("Average Occupation vs g")
+plt.grid()
+plt.show()
+plt.close()
+
+plt.plot(g_vals, num_n_n, '*-', label="Numerical <EDEDE>", color='blue')
+plt.plot(g_vals, an_n_n, label="Analytical <EDEDE>", color='orange', linestyle='dashed')
+plt.plot(g_vals, large_N_n_n, label="Thermodynamic <EDEDE>", color='green', linestyle='dotted')
+plt.xlabel("g")
+plt.ylabel("<EDEDE>")
+plt.legend()
+plt.title("Correlation <EDEDE> vs g")
+plt.grid()
+plt.show()
+plt.close()
