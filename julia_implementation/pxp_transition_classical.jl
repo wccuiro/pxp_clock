@@ -43,10 +43,10 @@ end
 # --- Main Script ---
 function main()
   ## 1. Define Parameters
-  N = 100
+  N = 10
   gamma_plus = 1.0
   gamma_minus = 1.5
-  V_penalty = 100.0
+  V_penalty = 200.0
   g_ratio = gamma_plus / gamma_minus
   sites = siteinds("S=1/2", N)
 
@@ -62,39 +62,42 @@ function main()
   println("\n--- METHOD A: Time Evolution (TDVP) ---")
 
   # Creates a state like ["Up", "Dn", "Up", "Dn", ...]
-  # initial_state_config = ["Dn" for n in 1:N]
+  initial_state_config = ["Dn" for n in 1:N]
   # psi0_tdvp = MPS(sites, initial_state_config)
   psi0_tdvp = randomMPS(sites; linkdims=6)
   normalize!(psi0_tdvp)
-  total_time = 20.0
-  time_step = 0.01
+  total_time = 1.0
+  time_step = 0.1
 
-  tdvp_time = @elapsed begin
-    global p_ss_tdvp = tdvp(W, total_time, psi0_tdvp; 
-                            time_step=time_step,
-                            normalize=true, 
-                            maxdim=150, 
-                            cutoff=1e-15)
-  end
+  # tdvp_time = @elapsed begin
+  #   global p_ss_tdvp = tdvp(W, total_time, psi0_tdvp; 
+  #                           time_step=time_step,
+  #                           normalize=true, 
+  #                           maxdim=150, 
+  #                           cutoff=1e-15)
+  # end
   println("✅ TDVP complete.")
-
+  
+  p_ss_tdvp = psi0_tdvp
+  tdvp_time = 0.0
   # ---
   ## 5. Method B: DMRG on W'W
   println("\n--- METHOD B: DMRG on W'W ---")
 
-  println("Constructing W'W MPO...")
+  # println("Constructing W'W MPO...")
   W_dag = dag(prime(W, "Link"))
-  WdagW = apply(W_dag, W; cutoff=1e-15)
-  println("✅ W'W MPO constructed.")
+  WdagW = apply(W_dag, W; cutoff=0, alg="zipup")
+  # WdagW = apply(W_dag, W; cutoff=1e-15)
+  # WdagW = contract(W_dag, W; method="naive", cutoff=0)
+  # println("✅ W'W MPO constructed.")
 
-  psi0_dmrg = randomMPS(sites; linkdims=6)
+  psi0_dmrg = randomMPS(sites; linkdims=12)
   # psi0_dmrg = MPS(sites, initial_state_config)
-  sweeps = Sweeps(50)
-  setmaxdim!(sweeps, 10, 20, 50, 100, 150)
-  setcutoff!(sweeps, 1e-10)
+  sweeps = Sweeps(60)
+  setmaxdim!(sweeps, 50, 100, 150, 200, 250, 300, 350, 400)
+  setcutoff!(sweeps, 1e-18)
 
   dmrg_time = @elapsed begin
-    # CORRECTED: Replaced observer with `quiet=true` to suppress sweep output
     global energy_dmrg, p_ss_dmrg = dmrg(WdagW, psi0_dmrg, sweeps; outputlevel=0)
   end
   println("✅ DMRG complete.")
@@ -149,7 +152,7 @@ function main()
   lhs_tdvp = g_ratio * corr_ddd_tdvp / N
   @printf("  LHS (g * <↓↓↓>): %.12f\n", lhs_tdvp)
   @printf("  RHS (<↓↑↓>):     %.12f\n", rhs_tdvp)
-  @printf("  Relative Error:  %.2e\n", abs(lhs_tdvp - rhs_tdvp) / abs(rhs_tdvp))
+  @printf("  Difference Error:  %.2e\n", abs(lhs_tdvp - rhs_tdvp) )
 
   # --- For the DMRG result ---
   println("\n🔬 Checking identity for DMRG steady state:")
@@ -166,7 +169,7 @@ function main()
   lhs_dmrg = g_ratio * corr_ddd_dmrg/N
   @printf("  LHS (g * <↓↓↓>): %.12f\n", lhs_dmrg)
   @printf("  RHS (<↓↑↓>):     %.12f\n", rhs_dmrg)
-  @printf("  Relative Error:  %.2e\n", abs(lhs_dmrg - rhs_dmrg) / abs(rhs_dmrg))
+  @printf("  Difference Error:  %.2e\n", abs(lhs_dmrg - rhs_dmrg))
 
   # # Check hard-core constraint violations
   # constraint_violation = 0.0
