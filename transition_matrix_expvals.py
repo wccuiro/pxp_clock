@@ -353,9 +353,25 @@ def main(gamma_plus, gamma_minus):
   # gamma_minus = 1.5
   z =  gamma_plus / gamma_minus
 
+def main(gamma_plus, gamma_minus):
+  global L
+  L = 12
+  T_INV = False
+  k_sector = 0
+  basis = generation_basis(L, t_inv=T_INV)
+
+  # for i in basis[0]:
+  #   print(f"{i:0{L}b}")
+
+  # gamma_plus = 1.0
+  # gamma_minus = 1.5
+  z =  gamma_plus / gamma_minus
+
 
   W = W_matrix(L, basis[0], basis[1], gamma_plus, gamma_minus, t_inv=T_INV, k=k_sector)
 
+  # # You can now use the sparse solver
+  # eigenvalues, eigenvectors = eigs(W_sparse, k=1, which='SR', sigma=1e-9)
 
   # # Convert the dense matrix to a CSR sparse matrix
   # W_sparse = csr_matrix(W)
@@ -473,43 +489,42 @@ def main(gamma_plus, gamma_minus):
   # print("Accumulated EDE:", acc_EDE)
   # print("Accumulated EDEDE:", acc_EDEDE)
   # print("Steady state correlation accumulated:", (1 + 3*z)/z * acc_EDE-1, acc_EDEDE)
-  
-  return exp_val_n_avg, exp_val_n_n, an_val, an_val_n_n, mpa_val, (1+3*z)/z * mpa_val -1
 
+  return exp_val_n_avg, exp_val_n_n, an_val, an_val_n_n, mpa_val, (1 + 3*z)/z * mpa_val -1
 
-gs = np.linspace(0.01, 100.0, 100)
+g_vals =  np.linspace(1e4, 1e6, 100)
 
-n_num, n_n_num, n_an, n_n_an, n_N, n_n_N  = [], [], [], [], [], []
-for g in gs:
+num_n, num_n_n, an_n, an_n_n, large_N_n, large_N_n_n = [], [], [], [], [], []
+
+for g in g_vals:
   gamma_plus = g
   gamma_minus = 1.0
-  print("Gamma plus:", gamma_plus, "Gamma minus:", gamma_minus)
   results = main(gamma_plus, gamma_minus)
-  n_num.append(results[0].real)
-  n_n_num.append(results[1].real)
-  n_an.append(results[2].real)
-  n_n_an.append(results[3].real)
-  n_N.append(results[4].real)
-  n_n_N.append(results[5].real)
-  print("-----------------------------------------")
-  print("actual",g)
-  print("-----------------------------------------")
+  num_n.append(results[0].real)
+  num_n_n.append(results[1].real)
+  an_n.append(results[2].real)
+  an_n_n.append(results[3].real)
+  large_N_n.append(results[4].real)
+  large_N_n_n.append(results[5].real)
 
-print("-----------------------------------------")
-print("-----------------------------------------")
-print("-----------------------------------------")
-
-plt.plot(gs, n_num, '*-',label="Numerics")
-plt.plot(gs, n_an, label="Analytical")
-plt.plot(gs, n_N, label="large N")
+plt.plot(g_vals, num_n, '*-', label="Numerical <n>", color='blue')
+plt.plot(g_vals, an_n, label="Analytical <n>", color='orange', linestyle='dashed')
+plt.plot(g_vals, large_N_n, label="Thermodynamic <n>", color='green', linestyle='dotted')
+plt.xlabel("g")
+plt.ylabel("<n>")
 plt.legend()
+plt.title("Average Occupation vs g")
+plt.grid()
 plt.show()
 plt.close()
 
-
-plt.plot(gs, n_n_num,'*-',label="Numerics")
-plt.plot(gs, n_n_an, label="Analytical")
-plt.plot(gs, n_n_N, label="large N")
+plt.plot(g_vals, num_n_n, '*-', label="Numerical <EDEDE>", color='blue')
+plt.plot(g_vals, an_n_n, label="Analytical <EDEDE>", color='orange', linestyle='dashed')
+plt.plot(g_vals, large_N_n_n, label="Thermodynamic <EDEDE>", color='green', linestyle='dotted')
+plt.xlabel("g")
+plt.ylabel("<EDEDE>")
 plt.legend()
+plt.title("Correlation <EDEDE> vs g")
+plt.grid()
 plt.show()
 plt.close()
