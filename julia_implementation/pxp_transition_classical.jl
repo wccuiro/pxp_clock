@@ -59,27 +59,57 @@ function main()
 
   # ---
   ## 4. Method A: Time Evolution with TDVP
-  println("\n--- METHOD A: Time Evolution (TDVP) ---")
+  println("\n--- METHOD A: Time Evolution (TDVP) with Sum-of-Components Normalization ---")
 
-  # Creates a state like ["Up", "Dn", "Up", "Dn", ...]
+  # Let's call the MPS `p_mps` to clarify it represents a population vector.
   initial_state_config = ["Dn" for n in 1:N]
-  # psi0_tdvp = MPS(sites, initial_state_config)
   psi0_tdvp = randomMPS(sites; linkdims=6)
-  normalize!(psi0_tdvp)
-  total_time = 1.0
-  time_step = 0.1
 
-  # tdvp_time = @elapsed begin
-  #   global p_ss_tdvp = tdvp(W, total_time, psi0_tdvp; 
-  #                           time_step=time_step,
-  #                           normalize=true, 
-  #                           maxdim=150, 
-  #                           cutoff=1e-15)
-  # end
+  # --- Construct the "Summation Vector" as an MPS ---
+  # This is an MPS where each local tensor is a vector of all ones.
+  # The inner product <sum_mps|p_mps> yields the sum of all components of p_mps.
+  sum_tensors = ITensor[]
+  for j in 1:N
+    s = sites[j]
+    T = ITensor(1.0, s) # Fills the tensor with the value 1.0
+    push!(sum_tensors, T)
+  end
+  sum_mps = MPS(sum_tensors)
+  println("✅ Summation MPS for normalization constructed.")
+
+  # --- Perform initial normalization ---
+  initial_sum = inner(sum_mps, psi0_tdvp)
+  psi0_tdvp /= initial_sum
+  println("Initial sum of components is: ", inner(sum_mps, psi0_tdvp))
+
+  # Evolution parameters
+  total_time = 1.0
+  time_step = 0.01
+  num_steps = Int(div(total_time, time_step))
+
+  # --- Custom TDVP Loop ---
+  tdvp_time = @elapsed begin
+    for step in 1:num_steps
+      # Evolve by a single time_step. The solver propagates by exp(W * time_step).
+      # [cite_start]We disable the default L2 norm normalization provided by ITensor[cite: 2493].
+      tdvp(im * W, time_step, psi0_tdvp; 
+          normalize=false, 
+          maxdim=150, 
+          cutoff=1e-15)
+
+      # Manually normalize by the sum of components after the step
+      current_sum = inner(sum_mps, psi0_tdvp)
+      psi0_tdvp /= current_sum
+    end
+    # Assign the final state to the global variable
+    global p_ss_tdvp = psi0_tdvp
+  end
+
+  println("Final sum of components after evolution: ", inner(sum_mps, p_ss_tdvp))
   println("✅ TDVP complete.")
   
-  p_ss_tdvp = psi0_tdvp
-  tdvp_time = 0.0
+  # p_ss_tdvp = psi0_tdvp
+  # tdvp_time = 0.0
   # ---
   ## 5. Method B: DMRG on W'W
   println("\n--- METHOD B: DMRG on W'W ---")
@@ -93,8 +123,8 @@ function main()
 
   psi0_dmrg = randomMPS(sites; linkdims=12)
   # psi0_dmrg = MPS(sites, initial_state_config)
-  sweeps = Sweeps(60)
-  setmaxdim!(sweeps, 50, 100, 150, 200, 250, 300, 350, 400)
+  sweeps = Sweeps(10)
+  setmaxdim!(sweeps, 50, 100, 150, 200)
   setcutoff!(sweeps, 1e-18)
 
   dmrg_time = @elapsed begin
