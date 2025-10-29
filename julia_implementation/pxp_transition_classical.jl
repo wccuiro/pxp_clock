@@ -84,8 +84,8 @@ function main()
   println("Initial sum of components is: ", inner(sum_mps, psi0_tdvp))
 
   # Evolution parameters
-  total_time = 30.0
-  time_step = 0.01
+  total_time = 50.0
+  time_step = 0.1
   num_steps = Int(div(total_time, time_step))
 
   # --- Custom TDVP Loop ---
@@ -95,7 +95,7 @@ function main()
       # We disable the default L2 norm normalization provided by ITensor.
       tdvp(W, time_step, psi0_tdvp; 
           normalize=false, 
-          maxdim=400, 
+          maxdim=500, 
           cutoff=1e-15)
 
       # Manually normalize by the sum of components after the step
@@ -155,7 +155,7 @@ function main()
   function three_site_corr(p_mps::MPS, sum_mps::MPS, op1::String, op2::String, op3::String, j1::Int, j2::Int, j3::Int)
     s = siteinds(p_mps)
     
-    # [cite_start]Build an OpSum for the diagonal operator O[cite: 1571].
+    # Build an OpSum for the diagonal operator O.
     os = OpSum()
     os += 1.0, op1, j1, op2, j2, op3, j3
     
@@ -167,7 +167,9 @@ function main()
     val = inner(sum_mps, apply(O_mpo, p_mps))
     
     return real(val)
-  end  # --- For the TDVP result ---
+  end  
+  
+  # --- For the TDVP result ---
   println("\n🔬 Checking identity for TDVP steady state:")
   rhs_tdvp = 0.0
   corr_ddd_tdvp = 0.0
