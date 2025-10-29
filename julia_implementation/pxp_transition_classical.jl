@@ -31,11 +31,11 @@ function build_W_opsum(N::Int; gamma_plus::Float64, gamma_minus::Float64, V_pena
     W_os += gamma_minus, "ProjDn", jm1, "S-", j, "ProjDn", jp1
     W_os += -gamma_plus, "ProjDn", jm1, "ProjDn", j, "ProjDn", jp1
   end
-  # Hard-core constraint
-  for j in 1:N
-    jp1 = mod1(j + 1, N)
-    W_os += -V_penalty, "ProjUp", j, "ProjUp", jp1
-  end
+  # # Hard-core constraint
+  # for j in 1:N
+  #   jp1 = mod1(j + 1, N)
+  #   W_os += -V_penalty, "ProjUp", j, "ProjUp", jp1
+  # end
   return W_os
 end
 
@@ -62,7 +62,8 @@ function main()
   println("\n--- METHOD A: Time Evolution (TDVP) with Sum-of-Components Normalization ---")
 
   # Let's call the MPS `p_mps` to clarify it represents a population vector.
-  initial_state_config = ["Dn" for n in 1:N]
+  # initial_state_config = ["Dn" for n in 1:N]
+  # psi0_tdvp = MPS(sites, initial_state_config)
   psi0_tdvp = randomMPS(sites; linkdims=6)
 
   # --- Construct the "Summation Vector" as an MPS ---
@@ -83,7 +84,7 @@ function main()
   println("Initial sum of components is: ", inner(sum_mps, psi0_tdvp))
 
   # Evolution parameters
-  total_time = 1.0
+  total_time = 30.0
   time_step = 0.01
   num_steps = Int(div(total_time, time_step))
 
@@ -91,10 +92,10 @@ function main()
   tdvp_time = @elapsed begin
     for step in 1:num_steps
       # Evolve by a single time_step. The solver propagates by exp(W * time_step).
-      # [cite_start]We disable the default L2 norm normalization provided by ITensor[cite: 2493].
-      tdvp(im * W, time_step, psi0_tdvp; 
+      # We disable the default L2 norm normalization provided by ITensor.
+      tdvp(W, time_step, psi0_tdvp; 
           normalize=false, 
-          maxdim=150, 
+          maxdim=400, 
           cutoff=1e-15)
 
       # Manually normalize by the sum of components after the step
@@ -151,23 +152,22 @@ function main()
   Correctly and robustly calculates the three-site correlation function
   <ψ|O₁(j₁) O₂(j₂) O₃(j₃)|ψ> by building a lightweight MPO for the operator.
   """
-  function three_site_corr(psi::MPS, op1::String, op2::String, op3::String, j1::Int, j2::Int, j3::Int)
-      s = siteinds(psi)
-      
-      # Build an OpSum containing only the desired three-site operator term
-      os = OpSum()
-      os += 1.0, op1, j1, op2, j2, op3, j3
-      
-      # Convert this simple OpSum into an MPO. This MPO is mostly identity operators.
-      O_mpo = MPO(os, s)
-      
-      # Use the efficient "sandwich" inner product with the MPO
-      val = inner(psi', O_mpo, psi)
-      
-      # Return the real part to discard negligible numerical noise
-      return real(val)
-  end
-  # --- For the TDVP result ---
+  function three_site_corr(p_mps::MPS, sum_mps::MPS, op1::String, op2::String, op3::String, j1::Int, j2::Int, j3::Int)
+    s = siteinds(p_mps)
+    
+    # [cite_start]Build an OpSum for the diagonal operator O[cite: 1571].
+    os = OpSum()
+    os += 1.0, op1, j1, op2, j2, op3, j3
+    
+    # [cite_start]Convert the OpSum into an MPO[cite: 1572].
+    O_mpo = MPO(os, s)
+    
+    # This computes Σᵢ pᵢ Oᵢ, the correct classical expectation value.
+    # It is equivalent to inner(sum_mps, apply(O_mpo, p_mps)).
+    val = inner(sum_mps, apply(O_mpo, p_mps))
+    
+    return real(val)
+  end  # --- For the TDVP result ---
   println("\n🔬 Checking identity for TDVP steady state:")
   rhs_tdvp = 0.0
   corr_ddd_tdvp = 0.0
@@ -175,8 +175,8 @@ function main()
     j = i
     jm1 = mod1(j - 1, N)
     jp1 = mod1(j + 1, N)
-    rhs_tdvp += three_site_corr(p_ss_tdvp, "ProjDn", "ProjUp", "ProjDn", jm1, j, jp1)
-    corr_ddd_tdvp += three_site_corr(p_ss_tdvp, "ProjDn", "ProjDn", "ProjDn", jm1, j, jp1)
+    rhs_tdvp += three_site_corr(p_ss_tdvp, sum_mps, "ProjDn", "ProjUp", "ProjDn", jm1, j, jp1)
+    corr_ddd_tdvp += three_site_corr(p_ss_tdvp, sum_mps, "ProjDn", "ProjDn", "ProjDn", jm1, j, jp1)
   end
   rhs_tdvp /= N
   lhs_tdvp = g_ratio * corr_ddd_tdvp / N
@@ -192,8 +192,8 @@ function main()
     j = i
     jm1 = mod1(j - 1, N)
     jp1 = mod1(j + 1, N)
-    rhs_dmrg += three_site_corr(p_ss_dmrg, "ProjDn", "ProjUp", "ProjDn", jm1, j, jp1)
-    corr_ddd_dmrg += three_site_corr(p_ss_dmrg, "ProjDn", "ProjDn", "ProjDn", jm1, j, jp1)
+    rhs_dmrg += three_site_corr(p_ss_dmrg, sum_mps, "ProjDn", "ProjUp", "ProjDn", jm1, j, jp1)
+    corr_ddd_dmrg += three_site_corr(p_ss_dmrg, sum_mps, "ProjDn", "ProjDn", "ProjDn", jm1, j, jp1)
   end
   rhs_dmrg /= N
   lhs_dmrg = g_ratio * corr_ddd_dmrg/N
