@@ -54,7 +54,7 @@ def generation_basis(L, t_inv=False):
 ############################ JUMP OPERATORS #################################
 #############################################################################
 
-threshold = 1e-12
+threshold = 1e-10
 def normalization_factor(L, states, k=0):
   norm2 = 0
   for j in range(L):
@@ -69,6 +69,8 @@ def dissipators_spin(rep_basis, full_basis, spin, t_inv=False, k=0):
   if t_inv:
     L_plus_spin = np.zeros((len(rep_basis),len(rep_basis)), dtype=complex)
     L_minus_spin = np.zeros((len(rep_basis),len(rep_basis)), dtype=complex)
+    L_dagger_L_minus_spin = np.zeros((len(rep_basis),len(rep_basis)), dtype=complex)
+    L_dagger_L_plus_spin = np.zeros((len(rep_basis),len(rep_basis)), dtype=complex)
 
     for init in rep_basis:
       for target in rep_basis:
@@ -82,13 +84,19 @@ def dissipators_spin(rep_basis, full_basis, spin, t_inv=False, k=0):
 
               if ((full_basis[init][i] >> ((spin-1)%L)) & 1) == 0 and ((full_basis[init][i] >> ((spin+1)%L)) & 1) == 0:
                 state_p = full_basis[init][i] ^ (1 << spin)
-                
+
                 if state_p & 1<<spin and state_p == full_basis[target][t]:
                   # print(full_basis[init][i],full_basis[target][t])
                   L_plus_spin[full_basis[target][-1],full_basis[init][-1]] += np.exp(1j*2*np.pi*k*(i-t)/L) / ( norm_init * norm_target)
 
                 if not (state_p & 1<<spin) and state_p == full_basis[target][t]:
                   L_minus_spin[full_basis[target][-1],full_basis[init][-1]] += np.exp(1j*2*np.pi*k*(i-t)/L) / ( norm_init * norm_target)
+
+                if full_basis[init][i] & 1<<spin and full_basis[init][i] == full_basis[target][t]:
+                  L_dagger_L_minus_spin[full_basis[target][-1],full_basis[init][-1]] += np.exp(1j*2*np.pi*k*(i-t)/L) / ( norm_init * norm_target)
+
+                if not(full_basis[init][i] & 1<<spin) and full_basis[init][i] == full_basis[target][t]:
+                  L_dagger_L_plus_spin[full_basis[target][-1],full_basis[init][-1]] += np.exp(1j*2*np.pi*k*(i-t)/L) / ( norm_init * norm_target)
 
   else:
     L_plus_spin = np.zeros((len(rep_basis),len(rep_basis)), dtype=complex)
@@ -105,8 +113,11 @@ def dissipators_spin(rep_basis, full_basis, spin, t_inv=False, k=0):
           L_plus_spin [ full_basis[state_p], full_basis[state]] += 1
           # print("gamma_plus")
 
-  
-  return L_plus_spin, L_minus_spin
+    L_dagger_L_minus_spin = L_minus_spin.conj().T @ L_minus_spin
+    L_dagger_L_plus_spin = L_plus_spin.conj().T @ L_plus_spin
+
+
+  return L_plus_spin, L_minus_spin, L_dagger_L_minus_spin, L_dagger_L_plus_spin 
 
 #############################################################################
 ###################### GENERATION OF THE DISSIPATOR #########################
@@ -120,10 +131,10 @@ def W_matrix(L, states, index, gamma_plus, gamma_minus, t_inv=False, k=0):
 
     for i in range(L):
 
-      L_plus_i, L_minus_i = dissipators_spin(states, index, i, t_inv, k=k)
+      L_plus_i, L_minus_i, L_dagger_L_minus_spin, L_dagger_L_plus_spin = dissipators_spin(states, index, i, t_inv, k=k)
 
-      W_minus += np.multiply(L_minus_i, L_minus_i.conj()) - np.diag(np.diag(L_minus_i.conj().T @ L_minus_i))
-      W_plus += np.multiply(L_plus_i, L_plus_i.conj()) - np.diag(np.diag(L_plus_i.conj().T @ L_plus_i))
+      W_minus += np.multiply(L_minus_i, L_minus_i.conj()) - np.diag(np.diag(L_dagger_L_minus_spin))
+      W_plus += np.multiply(L_plus_i, L_plus_i.conj()) - np.diag(np.diag(L_dagger_L_plus_spin))
 
     W = gamma_minus * W_minus + gamma_plus * W_plus
 
@@ -132,7 +143,7 @@ def W_matrix(L, states, index, gamma_plus, gamma_minus, t_inv=False, k=0):
   else:
     for i in range(L):
 
-      L_plus_i, L_minus_i = dissipators_spin(states, index, i, t_inv, k=k)
+      L_plus_i, L_minus_i,_,_ = dissipators_spin(states, index, i, t_inv, k=k)
 
       W_minus += np.multiply(L_minus_i, L_minus_i.conj()) - np.diag(np.diag(L_minus_i.conj().T @ L_minus_i))
       W_plus += np.multiply(L_plus_i, L_plus_i.conj()) - np.diag(np.diag(L_plus_i.conj().T @ L_plus_i))
@@ -153,17 +164,17 @@ def EEE_EDE_matrix(L, states, index, gamma_plus, gamma_minus, t_inv=False, k=0):
 
     for i in range(L):
 
-      L_plus_i, L_minus_i = dissipators_spin(states, index, i, t_inv, k=k)
+      L_plus_i, L_minus_i, L_dagger_L_minus_spin, L_dagger_L_plus_spin = dissipators_spin(states, index, i, t_inv, k=k)
 
-      EEE_matrix += L_plus_i.conj().T @ L_plus_i
-      EDE_matrix += L_minus_i.conj().T @ L_minus_i
+      EEE_matrix += L_dagger_L_plus_spin
+      EDE_matrix += L_dagger_L_minus_spin
 
     return EEE_matrix/L, EDE_matrix/L
 
   else:
     for i in range(L):
 
-      L_plus_i, L_minus_i = dissipators_spin(states, index, i, t_inv, k=k)
+      L_plus_i, L_minus_i,_,_ = dissipators_spin(states, index, i, t_inv, k=k)
 
       EEE_matrix += L_plus_i.conj().T @ L_plus_i
       EDE_matrix += L_minus_i.conj().T @ L_minus_i
@@ -182,16 +193,16 @@ def avg_occupation (L, states, index, t_inv=False, k=0):
 
     for i in range(L):
 
-      L_plus_i, L_minus_i = dissipators_spin(states, index, i, t_inv, k=k)
+      _, _, L_dagger_L_minus_spin, _ = dissipators_spin(states, index, i, t_inv, k=k)
 
-      n_avg += L_minus_i.conj().T @ L_minus_i
+      n_avg += L_dagger_L_minus_spin
 
     return n_avg/L
 
   else:
     for i in range(L):
 
-      L_plus_i, L_minus_i = dissipators_spin(states, index, i, t_inv, k=k)
+      _, L_minus_i,_,_ = dissipators_spin(states, index, i, t_inv, k=k)
 
       n_avg += L_minus_i.conj().T @ L_minus_i
 
@@ -208,10 +219,10 @@ def correlation (L, states, index, t_inv=False, k=0):
 
     for i in range(L):
 
-      L_plus_i, L_minus_ib = dissipators_spin(states, index, (i-1)%L, t_inv, k=k)
-      L_plus_i, L_minus_ia = dissipators_spin(states, index, (i+1)%L, t_inv, k=k)
+      _, _, L_dagger_L_minus_spin_ib,_ = dissipators_spin(states, index, (i-1)%L, t_inv, k=k)
+      _, _, L_dagger_L_minus_spin_ia,_ = dissipators_spin(states, index, (i+1)%L, t_inv, k=k)
 
-      n_n += L_minus_ib.conj().T @ L_minus_ib @ L_minus_ia.conj().T @ L_minus_ia
+      n_n += L_dagger_L_minus_spin_ib @ L_dagger_L_minus_spin_ia
       
 
     return n_n/L
@@ -239,18 +250,18 @@ def correlation_2 (L, states, index, t_inv=False, k=0):
 
     for i in range(L):
 
-      L_plus_ib, L_minus_ib = dissipators_spin(states, index, (i-1)%L, t_inv, k=k)
-      L_plus_ia, L_minus_ia = dissipators_spin(states, index, (i+1)%L, t_inv, k=k)
+      _, _,_,L_dagger_L_plus_spin_ib = dissipators_spin(states, index, (i-1)%L, t_inv, k=k)
+      _, _,_,L_dagger_L_plus_spin_ia = dissipators_spin(states, index, (i+1)%L, t_inv, k=k)
 
-      n_n += L_plus_ib.conj().T @ L_plus_ib @ L_plus_ia.conj().T @ L_plus_ia
+      n_n += L_dagger_L_plus_spin_ib @ L_dagger_L_plus_spin_ia
 
     return n_n/L
 
   else:
     for i in range(L):
 
-      L_plus_ib, L_minus_ib = dissipators_spin(states, index, (i-1)%L, t_inv, k=k)
-      L_plus_ia, L_minus_ia = dissipators_spin(states, index, (i+1)%L, t_inv, k=k)
+      L_plus_ib, _,_,_ = dissipators_spin(states, index, (i-1)%L, t_inv, k=k)
+      L_plus_ia, _,_,_ = dissipators_spin(states, index, (i+1)%L, t_inv, k=k)
 
       n_n += L_plus_ib.conj().T @ L_plus_ib @ L_plus_ia.conj().T @ L_plus_ia
 
@@ -265,7 +276,7 @@ def magnetization (L, states, index, t_inv=False, k=0):
 
   if t_inv:
     for i in range(L):
-      L_plus_i, L_minus_i = dissipators_spin(states, index, i, t_inv, k=k)
+      L_plus_i, L_minus_i,_,_ = dissipators_spin(states, index, i, t_inv, k=k)
       S_z += L_minus_i.conj().T @ L_minus_i - L_plus_i.conj().T @ L_plus_i
 
   else:
@@ -338,24 +349,10 @@ def analytical_EDEDE(L, gamma_plus, gamma_minus):
 #############################################################################
 ##################### TRACE IN REPRESENTATIVE BASIS #########################
 #############################################################################
-def main(gamma_plus, gamma_minus):
-
-  global  L 
-  L = 12
-  T_INV = False
-  k_sector = 0
-  basis = generation_basis(L, t_inv=T_INV)
-
-  # for i in basis[0]:
-  #   print(f"{i:0{L}b}")
-
-  # gamma_plus = 1.0
-  # gamma_minus = 1.5
-  z =  gamma_plus / gamma_minus
 
 def main(gamma_plus, gamma_minus):
   global L
-  L = 12
+  L = 10
   T_INV = False
   k_sector = 0
   basis = generation_basis(L, t_inv=T_INV)
@@ -492,7 +489,7 @@ def main(gamma_plus, gamma_minus):
 
   return exp_val_n_avg, exp_val_n_n, an_val, an_val_n_n, mpa_val, (1 + 3*z)/z * mpa_val -1
 
-g_vals =  np.linspace(1e4, 1e6, 100)
+g_vals =  np.linspace(1.5, 2, 2)
 
 num_n, num_n_n, an_n, an_n_n, large_N_n, large_N_n_n = [], [], [], [], [], []
 

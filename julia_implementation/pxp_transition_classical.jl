@@ -2,13 +2,6 @@ using ITensors, ITensorMPS
 using Printf      # For formatted printing of benchmark results
 using LinearAlgebra # To calculate the norm difference between results
 
-#
-# This script benchmarks two methods for finding the steady state of a
-# classical master equation for a constrained spin model:
-# 1. Real-time evolution using TDVP.
-# 2. Ground state search on W'W using DMRG.
-# The benchmark is performed using a known three-site correlation identity.
-#
 
 ITensors.op(::OpName"ProjUp", ::SiteType"S=1/2", s::Index) = 0.5 * op("Id", s) + op("Sz", s)
 ITensors.op(::OpName"ProjDn", ::SiteType"S=1/2", s::Index) = 0.5 * op("Id", s) - op("Sz", s)
@@ -43,7 +36,7 @@ end
 # --- Main Script ---
 function main()
   ## 1. Define Parameters
-  N = 10
+  N = 100
   gamma_plus = 1.0
   gamma_minus = 1.5
   V_penalty = 200.0
