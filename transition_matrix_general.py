@@ -432,6 +432,7 @@ for i in time:
   exp_val_n_avg.append(np.trace( pn_ss @ n_avg ).real)
 
 plt.plot(time, exp_val_n_avg, label='Avg Occupation')
+plt.title("Occupation vs Time")
 plt.xlabel('Time')
 plt.ylabel('<n>')
 plt.grid()
@@ -439,6 +440,7 @@ plt.show()
 plt.close()
 
 plt.plot(time, entropy)
+plt.title("Full entropy vs Time")
 plt.xlabel('Time')
 plt.ylabel('S')
 plt.grid()
@@ -447,6 +449,7 @@ plt.close()
 
 plt.plot(time, ent_entropy_left, label='Left L/2')
 plt.plot(time, ent_entropy_right, label='Right L/2')
+plt.title("Fake Entanglement Entropy vs Time")
 plt.xlabel('Time')
 plt.ylabel(r'$S_{ent}$')
 plt.legend()

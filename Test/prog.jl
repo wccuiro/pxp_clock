@@ -17,10 +17,17 @@ sim_data(n, om, gm, gp, step) = SimData(
             evolver = -im*hamiltonian(n,om) + dissipators(n, gm, gp),
             limits = Limits(cutoff = 1e-30, maxdim = 100),
             measures = [
-                "density.dat" => Sz
+                "density.dat" => Sp*Sm
             ]
         )
     ]
 )
 
-runTMS(sim_data(10, 1., 1., 1.5, 0.05))
+L = 10
+omega = 1.0
+gamma_m = 1.0
+gamma_p = 1.5
+time_step = 0.5
+
+
+runTMS(sim_data(10, 1., 1., 1.5, 0.5))
