@@ -116,7 +116,7 @@ def inner_product(a_in, b_out, k_sector_in, k_sector_out, L, basis):
   
   return ip/(norm_a*norm_b)
 
-def Hamiltonian_Lindblad_T_inv(L, basis, basis_per_sector_ordered_list, dimension_Q_sector, Q_sector):
+def Hamiltonian_Lindblad_T_inv(L, basis, basis_per_sector_ordered_list, dimension_Q_sector, Q_sector, Omega):
   H_cal = np.zeros((dimension_Q_sector, dimension_Q_sector), dtype=complex)
   
   ''' Run over all basis states  '''
@@ -149,23 +149,98 @@ def Hamiltonian_Lindblad_T_inv(L, basis, basis_per_sector_ordered_list, dimensio
         for ii in range(L):
           for jj in range(L):
             if states_b_h_in[ii] == states_b_out[jj] and states_b_h_in[ii] & (1 << ((site-1)%L)) == 0 and states_b_h_in[ii] & (1 << ((site+1)%L)) == 0:
-              b_prod += np.exp(1j*2*np.pi*( (k_out - Q_sector)*jj - (k_in - Q_sector)*ii)/L)
+              b_prod += np.exp(1j*2*np.pi*( -(k_out - Q_sector)*jj + (k_in - Q_sector)*ii)/L)
         b_prod /= (norm_b_in*norm_b_out)
         
-        H_cal[j,i] += -1j * (a_prod * inner_product(states_b_in, states_b_out, k_in - Q_sector, k_out - Q_sector, L, basis) - inner_product(states_a_in, states_a_out, k_in, k_out, L, basis) * b_prod)
+        H_cal[j,i] += -1j * Omega * (a_prod * inner_product(states_b_out, states_b_in , k_out - Q_sector, k_in - Q_sector, L, basis) - inner_product(states_a_in, states_a_out, k_in, k_out, L, basis) * b_prod)
 
   return H_cal
 
-def Dissipation_Lindblad_T_inv(L, basis, basis_per_sector_ordered_list, dimension_Q_sector, Q_sector):
+def Dissipation_Lindblad_T_inv(L, basis, basis_per_sector_ordered_list, dimension_Q_sector, Q_sector, gamma_plus, gamma_minus):
   D_cal = np.zeros((dimension_Q_sector, dimension_Q_sector), dtype=complex)
-  
+    
+  ''' Run over all basis states  '''
   for i, (a_in, b_in, k_in) in enumerate(basis_per_sector_ordered_list):
     for j, (a_out, b_out, k_out) in enumerate(basis_per_sector_ordered_list):
       states_a_in = basis[1][a_in]
       states_b_in = basis[1][b_in]
       states_a_out = basis[1][a_out]
       states_b_out = basis[1][b_out]
-      D_cal[j,i] = inner_product(states_a_in, states_a_out, k_in, k_out, L, basis) * inner_product(states_b_in, states_b_out, k_in - Q_sector, k_out - Q_sector, L, basis)
+      
+      ''' Run over spin sites to apply Lindblad operators '''
+      norm_a_in = normalization_factor(L, states_a_in, k=k_in)
+      norm_b_in = normalization_factor(L, states_b_in, k=k_in)
+      norm_a_out = normalization_factor(L, states_a_out, k=k_out)
+      norm_b_out = normalization_factor(L, states_b_out, k=k_out)
+
+      for site in range(L):
+        states_a_l_in = np.array(states_a_in) ^ (1 << site)
+        states_b_l_out = np.array(states_b_out) ^ (1 << site)
+
+        # L PLUS
+        ''' Run over elements of representative states '''
+        a_plus_prod = 0
+        for ii in range(L):
+          for jj in range(L):
+            if states_a_l_in[ii] == states_a_out[jj] and states_a_l_in[ii] & (1 << ((site-1)%L)) == 0 and states_a_l_in[ii] & (1 << ((site+1)%L)) == 0 and states_a_in[ii] & (1 << (site%L)) == 0:
+              a_plus_prod += np.exp(1j*2*np.pi*(k_out*jj-k_in*ii)/L)
+        a_plus_prod /= (norm_a_in*norm_a_out) 
+
+        b_plus_prod = 0
+        for ii in range(L):
+          for jj in range(L):
+            if states_b_l_out[ii] == states_b_in[jj] and states_b_l_out[ii] & (1 << ((site-1)%L)) == 0 and states_b_l_out[ii] & (1 << ((site+1)%L)) == 0 and states_b_l_out[ii] & (1 << (site%L)) == 0:
+              b_plus_prod += np.exp(1j*2*np.pi*( -(k_out - Q_sector)*ii + (k_in - Q_sector)*jj)/L)
+        b_plus_prod /= (norm_b_in*norm_b_out)
+        
+        aa_plus_prod = 0
+        for ii in range(L):
+          for jj in range(L):
+            if states_a_in[ii] == states_a_out[jj] and states_a_in[ii] & (1 << ((site-1)%L)) == 0 and states_a_in[ii] & (1 << ((site+1)%L)) == 0 and states_a_in[ii] & (1 << (site%L)) == 0:
+              aa_plus_prod += np.exp(1j*2*np.pi*(k_out*jj-k_in*ii)/L)
+        aa_plus_prod/= (norm_a_in*norm_a_out)
+        
+        bb_plus_prod = 0
+        for ii in range(L):
+          for jj in range(L):
+            if states_b_out[ii] == states_b_in[jj] and states_b_out[ii] & (1 << ((site-1)%L)) == 0 and states_b_out[ii] & (1 << ((site+1)%L)) == 0 and states_b_out[ii] & (1 << (site%L)) == 0:
+              bb_plus_prod += np.exp(1j*2*np.pi*( -(k_out - Q_sector)*ii + (k_in - Q_sector)*jj)/L)
+        bb_plus_prod /= (norm_b_in*norm_b_out)
+        
+        D_cal[j,i] += gamma_plus* (a_plus_prod * b_plus_prod - 0.5 * aa_plus_prod * inner_product(states_b_out, states_b_in, k_out - Q_sector, k_in - Q_sector, L, basis) - 0.5 * inner_product(states_a_in, states_a_out, k_in, k_out, L, basis) * bb_plus_prod )
+        
+
+        # L MINUS
+        ''' Run over elements of representative states '''
+        a_minus_prod = 0
+        for ii in range(L):
+          for jj in range(L):
+            if states_a_l_in[ii] == states_a_out[jj] and states_a_l_in[ii] & (1 << ((site-1)%L)) == 0 and states_a_l_in[ii] & (1 << ((site+1)%L)) == 0 and states_a_l_in[ii] & (1 << (site%L)) == 0:
+              a_minus_prod += np.exp(1j*2*np.pi*(k_out*jj-k_in*ii)/L)
+        a_minus_prod /= (norm_a_in*norm_a_out) 
+
+        b_minus_prod = 0
+        for ii in range(L):
+          for jj in range(L):
+            if states_b_l_out[ii] == states_b_in[jj] and states_b_l_out[ii] & (1 << ((site-1)%L)) == 0 and states_b_l_out[ii] & (1 << ((site+1)%L)) == 0 and states_b_out[ii] & (1 << (site%L)) == 0:
+              b_minus_prod += np.exp(1j*2*np.pi*( -(k_out - Q_sector)*ii + (k_in - Q_sector)*jj)/L)
+        b_minus_prod /= (norm_b_in*norm_b_out)
+        
+        aa_minus_prod = 0
+        for ii in range(L):
+          for jj in range(L):
+            if states_a_in[ii] == states_a_out[jj] and states_a_in[ii] & (1 << ((site-1)%L)) == 0 and states_a_in[ii] & (1 << ((site+1)%L)) == 0 and states_a_l_in[ii] & (1 << (site%L)) == 0:
+              aa_minus_prod += np.exp(1j*2*np.pi*(k_out*jj-k_in*ii)/L)
+        aa_minus_prod/= (norm_a_in*norm_a_out)
+        
+        bb_minus_prod = 0
+        for ii in range(L):
+          for jj in range(L):
+            if states_b_out[ii] == states_b_in[jj] and states_b_out[ii] & (1 << ((site-1)%L)) == 0 and states_b_out[ii] & (1 << ((site+1)%L)) == 0 and states_b_l_out[ii] & (1 << (site%L)) == 0:
+              bb_minus_prod += np.exp(1j*2*np.pi*( -(k_out - Q_sector)*ii + (k_in - Q_sector)*jj)/L)
+        bb_minus_prod /= (norm_b_in*norm_b_out)
+        
+        D_cal[j,i] += gamma_minus* (a_minus_prod * b_minus_prod - 0.5 * aa_minus_prod * inner_product(states_b_out, states_b_in, k_out - Q_sector, k_in - Q_sector, L, basis) - 0.5 * inner_product(states_a_in, states_a_out, k_in, k_out, L, basis) * bb_minus_prod )
 
   return D_cal
 
@@ -186,9 +261,11 @@ print(len(np.concatenate(list(basis_sector.values()))))
 ''' Listing basis test'''
 basis_per_sector_ordered_list = basis_per_sector_ordered(basis_sector)
 
-H_cal = Hamiltonian_Lindblad_T_inv(L, basis, basis_per_sector_ordered_list, dimension_Q_sector, Q_sector)
+H_cal = Hamiltonian_Lindblad_T_inv(L, basis, basis_per_sector_ordered_list, dimension_Q_sector, Q_sector, Omega=2.0)
 
-eigvlas, eigvecs = np.linalg.eig(H_cal)
+D_cal = Dissipation_Lindblad_T_inv(L, basis, basis_per_sector_ordered_list, dimension_Q_sector, Q_sector, gamma_plus=1.0, gamma_minus=0.5)
+
+eigvlas, eigvecs = np.linalg.eig(H_cal + D_cal)
 
 print("Eigenvalues Hamiltonian Lindblad:")
 print(eigvlas.real)
