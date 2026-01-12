@@ -385,76 +385,102 @@ def ent_entropy(L, qn, basis):
     reduced_vector_right[reduced_basis[1][reduced_state[1]]] += qn[i].real
   return reduced_vector_left, reduced_vector_right
 
-L = 10
-T_INV = False
-k_sector = 0
-basis = generation_basis(L, t_inv=T_INV)
+def coef_matrix(L, qn, basis):
+  reduced_basis = generation_sub_basis(int(L/2))
+  M = np.zeros((len(reduced_basis[0]),len(reduced_basis[0])))
+  for i in range(len(basis)):
+    reduced_state = partition(basis[i], int(L/2))
+    M[reduced_basis[1][reduced_state[0]], reduced_basis[1][reduced_state[1]]] += qn[i].real
+  return M
 
-# for i in basis[0]:
-#   print(f"{i:0{L}b}")
+for L in [6,8,10,12,14]:
+  # L = 8
+  T_INV = False
+  k_sector = 0
+  basis = generation_basis(L, t_inv=T_INV)
 
-gamma_plus = 1.0
-gamma_minus = 1.5
-z =  gamma_plus / gamma_minus
+  # for i in basis[0]:
+  #   print(f"{i:0{L}b}")
+
+  gamma_plus = 1.0
+  gamma_minus = 1.5
+  z =  gamma_plus / gamma_minus
 
 
-W = W_matrix(L, basis[0], basis[1], gamma_plus, gamma_minus, t_inv=T_INV, k=k_sector)
+  W = W_matrix(L, basis[0], basis[1], gamma_plus, gamma_minus, t_inv=T_INV, k=k_sector)
 
-initial_state = np.random.random(len(basis[0]))
-initial_state = initial_state / np.sum(initial_state)
+  initial_state = np.random.random(len(basis[0]))
+  initial_state = initial_state / np.sum(initial_state)
 
-final_time = 6.
-dt = 0.01
-steps = int(final_time / dt)
-time = np.linspace(0, final_time, steps)
+  final_time = 15.
+  dt = 0.1
+  steps = int(final_time / dt)
+  time = np.linspace(0, final_time, steps)
 
-exp_val_n_avg = []
-entropy = []
+  exp_val_n_avg = []
+  entropy = []
 
-ent_entropy_left = []
-ent_entropy_right = []
+  ent_entropy_left = []
+  ent_entropy_right = []
 
-for i in time:
-  state = expm(W*dt) @ initial_state
-  initial_state = state / np.sum(state)
-  
-  left, right = ent_entropy(L,initial_state,basis[0])
-  
-  ent_entropy_left.append(-np.sum(np.log(left.real)))
-  ent_entropy_right.append(-np.sum(np.log(right.real)))
+  bond_dimension = []
 
-  pn_ss = np.diag(initial_state)
+  for i in time:
+    state = expm(W*dt) @ initial_state
+    initial_state = state / np.sum(state)
+    
+    left, right = ent_entropy(L,initial_state,basis[0])
+    
+    M = coef_matrix(L,initial_state,basis[0])
+    singular_values = np.linalg.svd(M, compute_uv=False)
+    significant_values = singular_values[singular_values > threshold]
+    bond_dimension.append(len(significant_values))
+    
+    ent_entropy_left.append(-np.sum(np.log(left.real)))
+    ent_entropy_right.append(-np.sum(np.log(right.real)))
 
-  entropy.append(-np.sum(np.log(initial_state.real)))
-  
-  n_avg = avg_occupation(L, basis[0], basis[1], t_inv=T_INV, k=k_sector)
+    pn_ss = np.diag(initial_state)
 
-  exp_val_n_avg.append(np.trace( pn_ss @ n_avg ).real)
+    entropy.append(-np.sum(np.log(initial_state.real)))
+    
+    n_avg = avg_occupation(L, basis[0], basis[1], t_inv=T_INV, k=k_sector)
 
-plt.plot(time, exp_val_n_avg, label='Avg Occupation')
-plt.title("Occupation vs Time")
-plt.xlabel('Time')
-plt.ylabel('<n>')
+    exp_val_n_avg.append(np.trace( pn_ss @ n_avg ).real)
+
+  # plt.plot(time, exp_val_n_avg, label='Avg Occupation')
+  # plt.title("Occupation vs Time")
+  # plt.xlabel('Time')
+  # plt.ylabel('<n>')
+  # plt.grid()
+  # plt.show()
+  # plt.close()
+
+  plt.plot(time, bond_dimension, label=f'L={L}')
+  plt.title("Bond Dimension vs Time")
+  plt.legend()
+  plt.xlabel('Time')
+  plt.ylabel(r'$\chi$')
+
 plt.grid()
 plt.show()
 plt.close()
 
-plt.plot(time, entropy)
-plt.title("Full entropy vs Time")
-plt.xlabel('Time')
-plt.ylabel('S')
-plt.grid()
-plt.show()
-plt.close()
+# plt.plot(time, entropy)
+# plt.title("Full entropy vs Time")
+# plt.xlabel('Time')
+# plt.ylabel('S')
+# plt.grid()
+# plt.show()
+# plt.close()
 
-plt.plot(time, ent_entropy_left, label='Left L/2')
-plt.plot(time, ent_entropy_right, label='Right L/2')
-plt.title("Fake Entanglement Entropy vs Time")
-plt.xlabel('Time')
-plt.ylabel(r'$S_{ent}$')
-plt.legend()
-plt.grid()
-plt.show()
-plt.close()
+# plt.plot(time, ent_entropy_left, label='Left L/2')
+# plt.plot(time, ent_entropy_right, label='Right L/2')
+# plt.title("Fake Entanglement Entropy vs Time")
+# plt.xlabel('Time')
+# plt.ylabel(r'$S_{ent}$')
+# plt.legend()
+# plt.grid()
+# plt.show()
+# plt.close()
 
 # eig_vals, eig_vecs = np.linalg.eig(W)
