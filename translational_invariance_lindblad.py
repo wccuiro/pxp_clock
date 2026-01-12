@@ -244,7 +244,7 @@ def Dissipation_Lindblad_T_inv(L, basis, basis_per_sector_ordered_list, dimensio
 
   return D_cal
 
-L = 6
+L = 12
 T_INV = True
 Q_sector = 0
 
@@ -254,9 +254,9 @@ basis_sector = basis_per_sector(L, basis)
 
 dimension_Q_sector = sum(len(states)**2 for states in basis_sector.values())
 
-print(basis[0])
+# print(basis[0])
 
-print(len(np.concatenate(list(basis_sector.values()))))
+# print(len(np.concatenate(list(basis_sector.values()))))
 
 ''' Listing basis test'''
 basis_per_sector_ordered_list = basis_per_sector_ordered(basis_sector)
@@ -265,53 +265,64 @@ H_cal = Hamiltonian_Lindblad_T_inv(L, basis, basis_per_sector_ordered_list, dime
 
 D_cal = Dissipation_Lindblad_T_inv(L, basis, basis_per_sector_ordered_list, dimension_Q_sector, Q_sector, gamma_plus=1.0, gamma_minus=0.5)
 
-eigvlas, eigvecs = np.linalg.eig(H_cal + D_cal)
+L_cal = H_cal + D_cal
 
-print("Eigenvalues Hamiltonian Lindblad:")
-print(eigvlas.real)
-print(eigvlas.imag)
+eigvlas, eigvecs = np.linalg.eig(L_cal)
+
+# print("Eigenvalues Hamiltonian Lindblad:")
+# print(eigvlas.real)
+# print(eigvlas.imag)
 
 plt.plot(eigvlas.real, eigvlas.imag, 'o')
 plt.show()
 
-print(H_cal)
+# print(H_cal)
 
-count = 0
 
-A = np.zeros((dimension_Q_sector, dimension_Q_sector), dtype=object)
 
-for i, (a_in, b_in, k_in) in enumerate(basis_per_sector_ordered_list):
-  for j, (a_out, b_out, k_out) in enumerate(basis_per_sector_ordered_list):
-    values = f"<{a_out},{b_out},{k_out}| |{a_in},{b_in},{k_in}>"
 
-    A[j,i] = values
-    count += 1
+#############################################################################
+# Tests for the program
+#############################################################################
 
-print(A)
 
-print(f"Total states listed: {count**0.5}, {dimension_Q_sector}")
 
-total = 0
-for k_sector in range(L):
-  i = 0
-  for state in basis[0]:
-    norm = normalization_factor(L, basis[1][state], k=k_sector)
-    if norm > 0:
-      i += 1
-      # basis_sector.setdefault(k_sector,[]).append(state)
-      # print(f"State: {state:0{L}b}, Norm: {norm}")
-  # print(basis[0], basis_sector)
-  total += i
-  print(f"Total states in k={k_sector} sector: {i}")
+# count = 0
 
-print(f"Total states in all sectors: {total}")
+# A = np.zeros((dimension_Q_sector, dimension_Q_sector), dtype=object)
 
-T_INV = False
+# for i, (a_in, b_in, k_in) in enumerate(basis_per_sector_ordered_list):
+#   for j, (a_out, b_out, k_out) in enumerate(basis_per_sector_ordered_list):
+#     values = f"<{a_out},{b_out},{k_out}| |{a_in},{b_in},{k_in}>"
 
-print(basis[1][1][:L], np.array(basis[1][1][:L]) ^ 2)
+#     A[j,i] = values
+#     count += 1
 
-basis = generation_basis(L, t_inv=T_INV)
+# print(A)
 
-total = len(basis[0])
-print(f"Total states without translational invariance: {total}")
+# print(f"Total states listed: {count**0.5}, {dimension_Q_sector}")
+
+# total = 0
+# for k_sector in range(L):
+#   i = 0
+#   for state in basis[0]:
+#     norm = normalization_factor(L, basis[1][state], k=k_sector)
+#     if norm > 0:
+#       i += 1
+#       # basis_sector.setdefault(k_sector,[]).append(state)
+#       # print(f"State: {state:0{L}b}, Norm: {norm}")
+#   # print(basis[0], basis_sector)
+#   total += i
+#   print(f"Total states in k={k_sector} sector: {i}")
+
+# print(f"Total states in all sectors: {total}")
+
+# T_INV = False
+
+# print(basis[1][1][:L], np.array(basis[1][1][:L]) ^ 2)
+
+# basis = generation_basis(L, t_inv=T_INV)
+
+# total = len(basis[0])
+# print(f"Total states without translational invariance: {total}")
 
