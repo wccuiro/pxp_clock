@@ -1,5 +1,7 @@
 *.png
 *.toml
 *.npz
-/fig
+/data
 *.dat
+
+/rust/target
