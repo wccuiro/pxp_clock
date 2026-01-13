@@ -3,5 +3,6 @@
 *.npz
 /data
 *.dat
+*.csv
 
 /rust/target
