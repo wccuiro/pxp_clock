@@ -6,80 +6,34 @@ import matplotlib.pyplot as plt
 ###################### GENERATION OF THE BASIS ##############################
 #############################################################################
 
-def fibonacci_basis(L, pbc=False):
+def fibonacci_basis(L):
   states = []
   for i in range(1 << L):
     if i & (i >> 1) == 0:
-      if pbc and 2**0 & i and 2**(L-1) & i:
+      if 2**0 & i and 2**(L-1) & i:
         continue
       else:
         states.append(i)
   return states
 
-def translationally_invariant_basis(L):
-  states= fibonacci_basis(L, pbc=True)
-  rep_states = []
-  rep_index = {}
-  
-  basis = set(states)
-  
-  while len(basis) > 0:
-    
-    state = basis.copy().pop()
-    
-    shifted_states = {((state << i) | (state >> (L - i))) & ((1 << L) - 1) for i in range(L)}
-    
-    min_state = min(shifted_states)
-    
-    basis = set(basis) ^ set(shifted_states)
-    
-    rep_states.append(min_state)
-    
-    rep_index[min_state] = [len(shifted_states)]
-    
-  return rep_states, rep_index
-
-def generation_basis(L, pbc=False):
-  if pbc:
-    rep_states, rep_index = translationally_invariant_basis(L)
-    for i, s in enumerate(rep_states):
-      rep_index[s].append(i)
-      rep_index[s] = rep_index[s][::-1]
-  else:
-    rep_states = fibonacci_basis(L, pbc=False)
-    rep_index = {s: i for i,  s in enumerate(rep_states)}
+def generation_basis(L):
+  rep_states = fibonacci_basis(L)
+  rep_index = {s: i for i,  s in enumerate(rep_states)}
   return rep_states, rep_index
 
 #############################################################################
 ###################### GENERATION OF THE HAMILTONIAN ########################
 #############################################################################
 
-def Hamiltonian(L, states, index, omega, pbc=False, k=0):
+def Hamiltonian(L, states, index, omega):
   
   H = np.zeros((len(states), len(states)), dtype=complex)
   
-  if pbc:
-    for state in states:
-      for i in range(L):
-        if ((state >> ((i-1)%L)) & 1) == 0 and ((state >> ((i+1)%L)) & 1) == 0:
-          state_i_p = state ^ (1 << i)
-          state_p = state_i_p
-          d = 0
-          for j in range(L):
-            state_ii_p = ((state_i_p << j) | (state_i_p >> (L - j))) & ((1 << L) - 1)
-            
-            if state_ii_p < state_p:
-              state_p = state_ii_p
-              d = j
-          H [ index[state_p][0], index[state][0]] += omega * np.exp(-1j * 2 * np.pi * k * d / L) * np.sqrt(index[state][1] / index[state_p][1] )
-          # print("{:04b} --h-- {:04b} -- T -- {:04b}".format(state, state_i_p, state_p),i,d)
-          # print("Index:", index[state][0], index[state][1], index[state_p][0], index[state_p][1])
-  else:
-    for state in states:
-      for i in range(1,L-1):
-        if (state >> (i-1)) & 1 == 0 and (state >> (i+1)) & 1 == 0:
-            state_p = state ^ 2**i
-            H [ index[state], index[state_p] ] += omega
+  for state in states:
+    for i in range(L):
+      if (state >> ((i-1)%L)) & 1 == 0 and (state >> ((i+1)%L)) & 1 == 0:
+          state_p = state ^ 2**i
+          H [ index[state], index[state_p] ] += omega
 
             # print("{:04b} --h-- {:04b}".format(state, state_i_p),i)
   return H       
@@ -88,65 +42,32 @@ def Hamiltonian(L, states, index, omega, pbc=False, k=0):
 ###################### GENERATION OF THE DISSIPATOR #########################
 #############################################################################
 
-def dissipation(L, states, index, gamma_plus, gamma_minus, pbc=False, k=0):
+def dissipation(L, states, index, gamma_plus, gamma_minus):
   D_minus = np.zeros((len(states)**2, len(states)**2), dtype=complex)
   D_plus = np.zeros((len(states)**2, len(states)**2), dtype=complex)
 
-  if pbc:
-    
-    for i in range(L):
+  for i in range(L):
 
-      L_minus_i = np.zeros((len(states), len(states)), dtype=complex)
-      L_plus_i = np.zeros((len(states), len(states)), dtype=complex)
+    L_minus_i = np.zeros((len(states), len(states)), dtype=complex)
+    L_plus_i = np.zeros((len(states), len(states)), dtype=complex)
 
-      for state in states:
-        if ((state >> ((i-1)%L)) & 1) == 0 and ((state >> ((i+1)%L)) & 1) == 0:
-          state_i_p = state ^ (1 << i)
-          state_p = state_i_p
-          d = 0
-          for j in range(L):
-            state_ii_p = ((state_i_p << j) | (state_i_p >> (L - j))) & ((1 << L) - 1)
-            
-            if state_ii_p < state_p:
-              state_p = state_ii_p
-              d = j
-          if state & 1<<i:
-            L_minus_i [ index[state_p][0], index[state][0]] += np.exp(-1j * 2 * np.pi * k * d / L) * np.sqrt(index[state][1] / index[state_p][1] )
-            # print("gamma_minus")
-          else:
-            L_plus_i [ index[state_p][0], index[state][0]] += np.exp(-1j * 2 * np.pi * k * d / L) * np.sqrt(index[state][1] / index[state_p][1] )
-            # print("gamma_plus")          
+    for state in states:
+      if ((state >> ((i-1)%L)) & 1) == 0 and ((state >> ((i+1)%L)) & 1) == 0:
+        state_p = state ^ (1 << i)
+        d = 0
+        if state & 1<<i:
+          L_minus_i [ index[state_p], index[state]] += 1
+          # print("gamma_minus")
+        else:
+          L_plus_i [ index[state_p], index[state]] += 1
+          # print("gamma_plus")          
 
-      D_minus += np.kron(L_minus_i, L_minus_i.conj()) - 0.5 * np.kron(L_minus_i.conj().T @ L_minus_i, np.eye(len(states))) - 0.5 * np.kron(np.eye(len(states)), (L_minus_i.conj().T @ L_minus_i).T)
-      D_plus += np.kron(L_plus_i, L_plus_i.conj()) - 0.5 * np.kron(L_plus_i.conj().T @ L_plus_i, np.eye(len(states))) - 0.5 * np.kron(np.eye(len(states)), (L_plus_i.conj().T @ L_plus_i).T)
-    
-    D = gamma_minus * D_minus + gamma_plus * D_plus
-    
-    return D
-
-  else:
-    for i in range(1,L-1):
-
-      L_minus_i = np.zeros((len(states), len(states)), dtype=complex)
-      L_plus_i = np.zeros((len(states), len(states)), dtype=complex)
-
-      for state in states:
-        if ((state >> (i-1)) & 1) == 0 and ((state >> (i+1)) & 1) == 0:
-          state_p = state ^ (1 << i)
-          d = 0
-          if state & 1<<i:
-            L_minus_i [ index[state_p], index[state]] += 1
-            # print("gamma_minus")
-          else:
-            L_plus_i [ index[state_p], index[state]] += 1
-            # print("gamma_plus")          
-
-      D_minus += np.kron(L_minus_i, L_minus_i.conj()) - 0.5 * np.kron(L_minus_i.conj().T @ L_minus_i, np.eye(len(states))) - 0.5 * np.kron(np.eye(len(states)), (L_minus_i.conj().T @ L_minus_i).T)
-      D_plus += np.kron(L_plus_i, L_plus_i.conj()) - 0.5 * np.kron(L_plus_i.conj().T @ L_plus_i, np.eye(len(states))) - 0.5 * np.kron(np.eye(len(states)), (L_plus_i.conj().T @ L_plus_i).T)
-    
-    D = gamma_minus * D_minus + gamma_plus * D_plus
-    
-    return D
+    D_minus += np.kron(L_minus_i, L_minus_i.conj()) - 0.5 * np.kron(L_minus_i.conj().T @ L_minus_i, np.eye(len(states))) - 0.5 * np.kron(np.eye(len(states)), (L_minus_i.conj().T @ L_minus_i).T)
+    D_plus += np.kron(L_plus_i, L_plus_i.conj()) - 0.5 * np.kron(L_plus_i.conj().T @ L_plus_i, np.eye(len(states))) - 0.5 * np.kron(np.eye(len(states)), (L_plus_i.conj().T @ L_plus_i).T)
+  
+  D = gamma_minus * D_minus + gamma_plus * D_plus
+  
+  return D
 
 #############################################################################
 ###################### GENERATION OF THE LINDBLADIAN ########################
@@ -164,42 +85,16 @@ def lindblad_evolution(H, D):
 def transition_matrix(L, states, index, gamma_plus, gamma_minus, pbc=False, k=0):
   W = np.zeros((len(states), len(states)))
 
-  if pbc:
-    for state in states:
-      for i in range(L):
-        if ((state >> ((i-1)%L)) & 1) == 0 and ((state >> ((i+1)%L)) & 1) == 0:
-          state_i_p = state ^ (1 << i)
-          state_p = state_i_p
-          d = 0
-          for j in range(L):
-            state_ii_p = ((state_i_p << j) | (state_i_p >> (L - j))) & ((1 << L) - 1)
-            
-            if state_ii_p < state_p:
-              state_p = state_ii_p
-              d = j
-          if state & 1<<i:
-            W [ index[state_p][0], index[state][0]] += gamma_minus * index[state][1] / index[state_p][1] 
-            # print("gamma_minus")
-          else:
-            W [ index[state_p][0], index[state][0]] += gamma_plus * index[state][1] / index[state_p][1]
-            # print("gamma_plus")          
-    # np.fill_diagonal(W, -np.sum(W, axis=0))
-          W [ index[state][0], index[state][0] ] -= gamma_minus * index[state][1] / index[state_p][1] if state & 1<<i else gamma_plus * index[state][1] / index[state_p][1]
-          # print("{:04b} --h-- {:04b} -- T -- {:04b}".format(state, state_i_p, state_p),i,d)
-          # print("Index:", index[state][0], index[state][1], index[state_p][0], index[state_p][1])
-        
-        
-  else:
-    for state in states:
-      for i in range(1,L-1):
-        if (state >> (i-1)) & 1 == 0 and (state >> (i+1)) & 1 == 0:
-          state_p = state ^ 2**i
-          if state & 1<<i:
-            W [ index[state_p], index[state]] += gamma_minus
-          else:
-            W [ index[state_p], index[state]] += gamma_plus
-          W [ index[state], index[state] ] -= gamma_plus if not (state & 1<<i) else gamma_minus
-            # print("{:04b} --h-- {:04b}".format(state, state_i_p),i)
+  for state in states:
+    for i in range(1,L-1):
+      if (state >> ((i-1)%L)) & 1 == 0 and (state >> ((i+1)%L)) & 1 == 0:
+        state_p = state ^ 2**i
+        if state & 1<<i:
+          W [ index[state_p], index[state]] += gamma_minus
+        else:
+          W [ index[state_p], index[state]] += gamma_plus
+        W [ index[state], index[state] ] -= gamma_plus if not (state & 1<<i) else gamma_minus
+          # print("{:04b} --h-- {:04b}".format(state, state_i_p),i)
   return W       
 
 #############################################################################
@@ -414,205 +309,210 @@ def heat_current(rho, sup_p_D, sup_m_D,H):
 ###################### SETTING MATRICES ####################################
 ############################################################################
 
-L = 12
-PBC = True
-k_sector = 0
-basis = generation_basis(L, pbc=PBC)
+L = 6
+basis = generation_basis(L)
 
-gamma_plus = 0.5
-gamma_minus = 0.01
-omega = 0.01
+gamma_plus = 1.0
+gamma_minus = 0.5
+omega = 2.0
 
-H = Hamiltonian(L, basis[0], basis[1], omega, pbc=PBC, k=k_sector)
-D = dissipation(L, basis[0], basis[1], gamma_plus, gamma_minus, pbc=PBC, k=k_sector)
+H = Hamiltonian(L, basis[0], basis[1], omega)
+D = dissipation(L, basis[0], basis[1], gamma_plus, gamma_minus)
 Lind = lindblad_evolution(H, D)
 
-W = transition_matrix(L, basis[0], basis[1], gamma_plus, gamma_minus, pbc=PBC, k=k_sector)
+eigvals_Lind = np.linalg.eigvals(Lind)
 
-proj_D, idx, full_proj_D = project_D_onto_diagonal_subspace(D)
+# plt.plot(np.real(eigvals_Lind), np.imag(eigvals_Lind), 'o')
+# plt.show()
+for i in range(len(eigvals_Lind)):
+  print(str(eigvals_Lind[i].real)+','+str(eigvals_Lind[i].imag))
 
-############################################################################
-###################### SANITY CHECKS PRINTS ################################
-############################################################################
-print("Basis H size:", len(basis[0]))
-print("Basis L = H x H size:", len(basis[0])**2)
+# W = transition_matrix(L, basis[0], basis[1], gamma_plus, gamma_minus, pbc=PBC, k=k_sector)
 
+# proj_D, idx, full_proj_D = project_D_onto_diagonal_subspace(D)
 
-# print(np.min(np.abs(D)))
-
-# print(np.matrix(proj_D))
-# print("-----")
-# print(np.matrix(W))
-print("Max Difference between W and PLP:", np.max(np.abs(W-proj_D)))
-
-##############################################################################
-########################## EIGENVALUES CLEAN #################################
-##############################################################################
-
-eigenvalues_proj_D, eigenvectors_proj_D = np.linalg.eig(proj_D)
-
-eigenvalues_Lind, eigenvectors_Lind = np.linalg.eig(Lind)
-eigenvalues_W, eigenvectors_W = np.linalg.eig(W)
+# ############################################################################
+# ###################### SANITY CHECKS PRINTS ################################
+# ############################################################################
+# print("Basis H size:", len(basis[0]))
+# print("Basis L = H x H size:", len(basis[0])**2)
 
 
-threshold_eigval = 1e-10
+# # print(np.min(np.abs(D)))
 
-for i in range(len(eigenvalues_Lind)):
-  if np.abs(np.real(eigenvalues_Lind[i])) < threshold_eigval:
-    eigenvalues_Lind[i] = 1j * np.imag(eigenvalues_Lind[i])
-  if np.abs(np.imag(eigenvalues_Lind[i])) < threshold_eigval:
-    eigenvalues_Lind[i] = np.real(eigenvalues_Lind[i])
+# # print(np.matrix(proj_D))
+# # print("-----")
+# # print(np.matrix(W))
+# print("Max Difference between W and PLP:", np.max(np.abs(W-proj_D)))
 
-for i in range(len(eigenvalues_W)):
-  if np.abs(np.real(eigenvalues_W[i])) < threshold_eigval:
-    eigenvalues_W[i] = 0
+# ##############################################################################
+# ########################## EIGENVALUES CLEAN #################################
+# ##############################################################################
 
-for i in range(len(eigenvalues_proj_D)):
-  if np.abs(np.real(eigenvalues_proj_D[i])) < threshold_eigval:
-    eigenvalues_proj_D[i] = 1j * np.imag(eigenvalues_proj_D[i])
+# eigenvalues_proj_D, eigenvectors_proj_D = np.linalg.eig(proj_D)
 
-# # for i in range(len(eigenvalues_W)):
-# #   eigenvalues_W[i] = eigenvalues_W[i] * basis[1][basis[0][i]][1]
+# eigenvalues_Lind, eigenvectors_Lind = np.linalg.eig(Lind)
+# eigenvalues_W, eigenvectors_W = np.linalg.eig(W)
 
-plt.plot(np.real(eigenvalues_W), np.imag(eigenvalues_W), 'bo', markersize=7, label='W')
-plt.plot(np.real(eigenvalues_proj_D), np.imag(eigenvalues_proj_D), 'r*', markersize=5, label='PLP')
-plt.plot(np.real(eigenvalues_Lind), np.imag(eigenvalues_Lind), 'gx', label='L')
-plt.xlabel('Re')
-plt.ylabel('Im')
-plt.title('Eigenvalues of W, PLP, L')
-plt.legend(loc = "upper left")
-plt.grid(True)
-plt.show()
-plt.close()
 
-##############################################################################
-########################## EIGENVECTORS CHECK ################################
-##############################################################################
+# threshold_eigval = 1e-10
 
-threshold_tr = 1e-7
-l=0
-for i in range(len(eigenvalues_Lind)):
-  rho = eigenvectors_Lind[:,i].reshape((H.shape[0], H.shape[0]), order='C')
-  rho = 0.5*(rho + rho.conj().T)
-  if np.abs(np.trace(rho)) < threshold_tr:
-    l+=1
-print("Number of traceless states with threshold", threshold_tr, ": ",l)
+# for i in range(len(eigenvalues_Lind)):
+#   if np.abs(np.real(eigenvalues_Lind[i])) < threshold_eigval:
+#     eigenvalues_Lind[i] = 1j * np.imag(eigenvalues_Lind[i])
+#   if np.abs(np.imag(eigenvalues_Lind[i])) < threshold_eigval:
+#     eigenvalues_Lind[i] = np.real(eigenvalues_Lind[i])
 
-j=0
-vec_steady_states = np.zeros((len(basis[0])**2,len(basis[0])**2-l), dtype=complex) 
-for i in range(eigenvalues_Lind.shape[0]):
-  if np.abs(eigenvalues_Lind[i]) == 0:
-    vec_steady_states[:,j] = eigenvectors_Lind[:,i]
-    j+=1
+# for i in range(len(eigenvalues_W)):
+#   if np.abs(np.real(eigenvalues_W[i])) < threshold_eigval:
+#     eigenvalues_W[i] = 0
 
-print("Number of steady states with threshold", threshold_eigval, ": ",len(basis[0])**2-l)
+# for i in range(len(eigenvalues_proj_D)):
+#   if np.abs(np.real(eigenvalues_proj_D[i])) < threshold_eigval:
+#     eigenvalues_proj_D[i] = 1j * np.imag(eigenvalues_proj_D[i])
 
-##############################################################################
-################### NORMALIZATION STEADY STATES ##############################
-##############################################################################
+# # # for i in range(len(eigenvalues_W)):
+# # #   eigenvalues_W[i] = eigenvalues_W[i] * basis[1][basis[0][i]][1]
 
-steady_states = np.zeros((len(basis[0])**2-l, len(basis[0]), len(basis[0])), dtype=complex)
-for i in range(len(basis[0])**2-l):
-  steady_state = vec_steady_states[:,i].reshape((H.shape[0], H.shape[0]), order='C')
-  steady_state = 0.5*(steady_state + steady_state.conj().T)
-  tr = np.trace(steady_state)
-  if np.abs(tr) < 1e-16:
-      raise RuntimeError("Trace numerically zero; cannot normalize")
-  steady_states[i] = steady_state / tr
-
-print(steady_states.shape[0], " steady states normalized")
-
-for steady_state in steady_states:
-  if PBC:  
-    neel_state = sum(1 << i for i in range(0, L, 2))
-    index_neel = basis[1][neel_state][0]
-    print("The overlap of Neel representative with the steady state is: ", np.abs(steady_state[index_neel, index_neel]))
-
-  else:
-    neel_state = sum(1 << i for i in range(0, L, 2))
-    neel_state_T = 2 * neel_state
-    index_neel = basis[1][neel_state]
-    index_neel_T = basis[1][neel_state_T]
-    print("The overlap of Neel state with the steady state is: ", np.abs(steady_state[index_neel, index_neel]))
-    print("The overlap of T-Neel state with the steady state is: ", np.abs(steady_state[index_neel_T, index_neel_T]))
-    print("The overlap with the coherence Neel and T-Neel is: ", steady_state[index_neel, index_neel_T], steady_state[index_neel_T, index_neel])
-
-# print("Eigenvalues of Lindbladian:")
-# print(eigenvalues_Lind)
-
-# print(Lind)
-
-# plt.matshow(np.real(Lind), cmap='viridis')
-# # plt.matshow(H, cmap='viridis')
-# plt.colorbar()
-
+# plt.plot(np.real(eigenvalues_W), np.imag(eigenvalues_W), 'bo', markersize=7, label='W')
+# plt.plot(np.real(eigenvalues_proj_D), np.imag(eigenvalues_proj_D), 'r*', markersize=5, label='PLP')
+# plt.plot(np.real(eigenvalues_Lind), np.imag(eigenvalues_Lind), 'gx', label='L')
+# plt.xlabel('Re')
+# plt.ylabel('Im')
+# plt.title('Eigenvalues of W, PLP, L')
+# plt.legend(loc = "upper left")
+# plt.grid(True)
 # plt.show()
 # plt.close()
 
-plt.plot(np.real(eigenvalues_Lind), np.imag(eigenvalues_Lind), 'o')
-plt.xlabel('Re')
-plt.ylabel('Im')
-plt.title('Eigenvalues of Lindbladian')
-plt.grid(True)
-plt.show()
-plt.close()
+# ##############################################################################
+# ########################## EIGENVECTORS CHECK ################################
+# ##############################################################################
+
+# threshold_tr = 1e-7
+# l=0
+# for i in range(len(eigenvalues_Lind)):
+#   rho = eigenvectors_Lind[:,i].reshape((H.shape[0], H.shape[0]), order='C')
+#   rho = 0.5*(rho + rho.conj().T)
+#   if np.abs(np.trace(rho)) < threshold_tr:
+#     l+=1
+# print("Number of traceless states with threshold", threshold_tr, ": ",l)
+
+# j=0
+# vec_steady_states = np.zeros((len(basis[0])**2,len(basis[0])**2-l), dtype=complex) 
+# for i in range(eigenvalues_Lind.shape[0]):
+#   if np.abs(eigenvalues_Lind[i]) == 0:
+#     vec_steady_states[:,j] = eigenvectors_Lind[:,i]
+#     j+=1
+
+# print("Number of steady states with threshold", threshold_eigval, ": ",len(basis[0])**2-l)
+
+# ##############################################################################
+# ################### NORMALIZATION STEADY STATES ##############################
+# ##############################################################################
+
+# steady_states = np.zeros((len(basis[0])**2-l, len(basis[0]), len(basis[0])), dtype=complex)
+# for i in range(len(basis[0])**2-l):
+#   steady_state = vec_steady_states[:,i].reshape((H.shape[0], H.shape[0]), order='C')
+#   steady_state = 0.5*(steady_state + steady_state.conj().T)
+#   tr = np.trace(steady_state)
+#   if np.abs(tr) < 1e-16:
+#       raise RuntimeError("Trace numerically zero; cannot normalize")
+#   steady_states[i] = steady_state / tr
+
+# print(steady_states.shape[0], " steady states normalized")
+
+# for steady_state in steady_states:
+#   if PBC:  
+#     neel_state = sum(1 << i for i in range(0, L, 2))
+#     index_neel = basis[1][neel_state][0]
+#     print("The overlap of Neel representative with the steady state is: ", np.abs(steady_state[index_neel, index_neel]))
+
+#   else:
+#     neel_state = sum(1 << i for i in range(0, L, 2))
+#     neel_state_T = 2 * neel_state
+#     index_neel = basis[1][neel_state]
+#     index_neel_T = basis[1][neel_state_T]
+#     print("The overlap of Neel state with the steady state is: ", np.abs(steady_state[index_neel, index_neel]))
+#     print("The overlap of T-Neel state with the steady state is: ", np.abs(steady_state[index_neel_T, index_neel_T]))
+#     print("The overlap with the coherence Neel and T-Neel is: ", steady_state[index_neel, index_neel_T], steady_state[index_neel_T, index_neel])
+
+# # print("Eigenvalues of Lindbladian:")
+# # print(eigenvalues_Lind)
+
+# # print(Lind)
+
+# # plt.matshow(np.real(Lind), cmap='viridis')
+# # # plt.matshow(H, cmap='viridis')
+# # plt.colorbar()
+
+# # plt.show()
+# # plt.close()
+
+# plt.plot(np.real(eigenvalues_Lind), np.imag(eigenvalues_Lind), 'o')
+# plt.xlabel('Re')
+# plt.ylabel('Im')
+# plt.title('Eigenvalues of Lindbladian')
+# plt.grid(True)
+# plt.show()
+# plt.close()
 
 
-for steady_state in steady_states:
-  plt.matshow(np.abs(steady_state), cmap='viridis')
-  plt.title("Steady state")
-  # plt.matshow(H, cmap='viridis')
-  plt.colorbar()
+# for steady_state in steady_states:
+#   plt.matshow(np.abs(steady_state), cmap='viridis')
+#   plt.title("Steady state")
+#   # plt.matshow(H, cmap='viridis')
+#   plt.colorbar()
 
-  plt.show()
-  plt.close()
+#   plt.show()
+#   plt.close()
 
-##############################################################################
-########################## HEAT CURRENTS IN TIME #############################
-##############################################################################
+# ##############################################################################
+# ########################## HEAT CURRENTS IN TIME #############################
+# ##############################################################################
 
-D_plus, D_minus = dissipators(L, basis[0], basis[1], gamma_plus, gamma_minus, pbc=PBC, k=k_sector)
-for steady_state in steady_states:
-  heat_current_p, heat_current_m = heat_current(steady_state, D_plus, D_minus, H)
+# D_plus, D_minus = dissipators(L, basis[0], basis[1], gamma_plus, gamma_minus, pbc=PBC, k=k_sector)
+# for steady_state in steady_states:
+#   heat_current_p, heat_current_m = heat_current(steady_state, D_plus, D_minus, H)
 
-  print("Heat current plus in the steady state: ", heat_current_p)
-  print("Heat current plus in the steady state: ", heat_current_m)
+#   print("Heat current plus in the steady state: ", heat_current_p)
+#   print("Heat current plus in the steady state: ", heat_current_m)
 
-##############################################################################
-####################### MAGNETIZATION IN TIME ################################
-##############################################################################
+# ##############################################################################
+# ####################### MAGNETIZATION IN TIME ################################
+# ##############################################################################
 
-S_z = magnetization(L, basis[0], basis[1], pbc=PBC, k=k_sector)
+# S_z = magnetization(L, basis[0], basis[1], pbc=PBC, k=k_sector)
 
-rho_Neel = rho_neel_state(L, basis[0], basis[1], pbc=PBC, k=k_sector)
-rho_Neel_T = rho_neel_state_T(L, basis[0], basis[1], pbc=PBC, k=k_sector)
-rho_Neel_sup = rho_neel_state_sup(L, basis[0], basis[1], pbc=PBC, k=k_sector)
+# rho_Neel = rho_neel_state(L, basis[0], basis[1], pbc=PBC, k=k_sector)
+# rho_Neel_T = rho_neel_state_T(L, basis[0], basis[1], pbc=PBC, k=k_sector)
+# rho_Neel_sup = rho_neel_state_sup(L, basis[0], basis[1], pbc=PBC, k=k_sector)
 
-t_final = 20
-dt = 0.1
+# t_final = 20
+# dt = 0.1
 
-time_N, magnetization_N = magnetization_in_time (Lind, rho_Neel, S_z, t_final, dt)
-time_N_T, magnetization_N_T = magnetization_in_time (Lind, rho_Neel_T, S_z, t_final, dt)
-time_N_sup, magnetization_N_sup = magnetization_in_time (Lind, rho_Neel_sup, S_z, t_final, dt)
+# time_N, magnetization_N = magnetization_in_time (Lind, rho_Neel, S_z, t_final, dt)
+# time_N_T, magnetization_N_T = magnetization_in_time (Lind, rho_Neel_T, S_z, t_final, dt)
+# time_N_sup, magnetization_N_sup = magnetization_in_time (Lind, rho_Neel_sup, S_z, t_final, dt)
 
-plt.figure(figsize=(8,5))
-plt.plot(time_N, magnetization_N, label="Neel", color='blue')
-plt.plot(time_N_T, magnetization_N_T, label="Neel_T", color='red')
-plt.plot(time_N_sup, magnetization_N_sup, label="Neel + Neel_T", color='green')
-for steady_state in steady_states:
-  time_steady, magnetization_steady = magnetization_in_time (Lind, steady_state, S_z, t_final, dt)
-  plt.plot(time_steady, magnetization_steady, label="Steady state", color='orange')
-
-
+# plt.figure(figsize=(8,5))
+# plt.plot(time_N, magnetization_N, label="Neel", color='blue')
+# plt.plot(time_N_T, magnetization_N_T, label="Neel_T", color='red')
+# plt.plot(time_N_sup, magnetization_N_sup, label="Neel + Neel_T", color='green')
+# for steady_state in steady_states:
+#   time_steady, magnetization_steady = magnetization_in_time (Lind, steady_state, S_z, t_final, dt)
+#   plt.plot(time_steady, magnetization_steady, label="Steady state", color='orange')
 
 
-plt.xlabel("Time")
-plt.ylabel("Magnetization per site")
-plt.title("Magnetization dynamics")
-plt.legend()
-plt.grid(True)
-plt.show()
-plt.close()
+
+
+# plt.xlabel("Time")
+# plt.ylabel("Magnetization per site")
+# plt.title("Magnetization dynamics")
+# plt.legend()
+# plt.grid(True)
+# plt.show()
+# plt.close()
 
 
 

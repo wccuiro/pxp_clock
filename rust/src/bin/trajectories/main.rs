@@ -1,496 +1,1084 @@
-use ndarray::Array2;
-use ndarray_linalg::Eig;
+use ndarray::{array, Array1, Array2, s};
+// use ndarray::linalg::kron;
+
 use num_complex::Complex64;
+use rand::Rng;
+
 use rayon::prelude::*;
-use std::collections::{HashMap, HashSet};
-use std::f64::consts::PI;
-use std::fs::File;
-use std::io::Write;
+use plotters::prelude::*;
 
-const THRESHOLD: f64 = 1e-10;
+use indicatif::{ProgressBar, ProgressStyle};
 
-#[derive(Debug, Clone)]
-struct Basis {
-    rep_states: Vec<u64>,
-    rep_index: HashMap<u64, Vec<u64>>,
+fn create_jump_operators(lambda: f64, s: f64) -> (Array2<Complex64>, Array2<Complex64>) {
+
+    let sigma_plus = array![
+        [Complex64::new(0.0, 0.0), Complex64::new(1.0, 0.0)],
+        [Complex64::new(0.0, 0.0), Complex64::new(0.0, 0.0)]
+    ];
+    let sigma_minus = array![
+        [Complex64::new(0.0, 0.0), Complex64::new(0.0, 0.0)],
+        [Complex64::new(1.0, 0.0), Complex64::new(0.0, 0.0)]
+    ];
+
+    let identity = array![
+        [Complex64::new(1.0, 0.0), Complex64::new(0.0, 0.0)],
+        [Complex64::new(0.0, 0.0), Complex64::new(1.0, 0.0)]
+    ];
+
+    let l_plus = sigma_plus - identity.mapv(|e| e * Complex64::new(0.0, 1.0) * lambda * s);
+    let l_minus = sigma_minus + identity.mapv(|e| e * Complex64::new(0.0, 1.0) * lambda * s);
+    
+    (l_plus, l_minus)
+} 
+
+fn steady_state(s: f64, lambda: f64, gamma_p: f64, gamma_m: f64) -> (Array2<Complex64>, Array1<Complex64>, Array1<Complex64>, Array1<f64>) {
+    let delta: f64 =  ((gamma_m + gamma_p).powi(2) + 4. * (gamma_m - gamma_p).powi(2) * s.powi(2) * lambda.powi(2)).sqrt();
+
+    // Eigenvalues
+    let eig_val_1 = (gamma_m.powi(2) * (1. + 2. * s.powi(2) * lambda.powi(2)) + gamma_p * (gamma_p + 2. * gamma_p * s.powi(2) * lambda.powi(2) - delta) + gamma_m * (gamma_p * (2. - 4. * s.powi(2) * lambda.powi(2)) + delta)) / (2. * (gamma_m + gamma_p).powi(2) + 4. * (gamma_m - gamma_p).powi(2) * s.powi(2) * lambda.powi(2));
+
+    let eig_val_2 = (gamma_m.powi(2) * (1. + 2. * s.powi(2) * lambda.powi(2)) + gamma_p * (gamma_p + 2. * gamma_p * s.powi(2) * lambda.powi(2) + delta) - gamma_m * (gamma_p * (-2. + 4. * s.powi(2) * lambda.powi(2)) + delta)) / (2. * (gamma_m + gamma_p).powi(2) + 4. * (gamma_m - gamma_p).powi(2) * s.powi(2) * lambda.powi(2));
+
+    let mut eig_vals: Array1<f64> = array![eig_val_1, eig_val_2];
+    eig_vals = eig_vals.mapv(|e| e/ (eig_val_1 + eig_val_2));
+
+    // Eigenvectors
+    let i = Complex64::new(0.0, 1.0);
+
+    // psi1
+    let top11 = i * (gamma_m + gamma_p - delta);
+    let norm1 = (2.0 * ((gamma_m + gamma_p).powi(2)
+        + 4.0 * (gamma_m - gamma_p).powi(2) * s.powi(2) * lambda.powi(2)
+        - gamma_m * delta
+        - gamma_p * delta))
+        .sqrt();
+    let top12 = (4. * (gamma_m - gamma_p).powi(2) * s.powi(2) * lambda.powi(2)).sqrt();
+    let mut psi1 = Array1::from(vec![top11 / norm1, Complex64::new( top12 / norm1, 0.0)]);
+    psi1 /= psi1.mapv(|e| e.conj()).dot(&psi1).sqrt();
+
+    // psi2
+    let top21 = i * (gamma_m + gamma_p + delta);
+    let norm2 = (2.0 * ((gamma_m + gamma_p).powi(2)
+        + 4.0 * (gamma_m - gamma_p).powi(2) * s.powi(2) * lambda.powi(2)
+        + gamma_m * delta
+        + gamma_p * delta))
+        .sqrt();
+    let top22 = (4. * (gamma_m - gamma_p).powi(2) * s.powi(2) * lambda.powi(2)).sqrt();
+    let mut psi2 = Array1::from(vec![top21 / norm2, Complex64::new( top22 / norm2, 0.0)]);
+    psi2 /= psi2.mapv(|e| e.conj()).dot(&psi2).sqrt();
+
+
+    // Steady state density matrix
+    let a = psi1[0];
+    let b = psi1[1];
+    let op1 = array![
+        [a * a.conj(), a * b.conj()],
+        [b * a.conj(), b * b.conj()]
+    ];
+
+    // Compute |psi2><psi2|
+    let c = psi2[0];
+    let d = psi2[1];
+    let op2 = array![
+        [c * c.conj(), c * d.conj()],
+        [d * c.conj(), d * d.conj()]
+    ];
+
+    // Weighted sum
+    let mut pi = op1.mapv(|v| v * eig_vals[0]) + op2.mapv(|v| v * eig_vals[1]);
+
+    // Normalize by trace
+    let trace: f64 = (pi[(0, 0)] + pi[(1, 1)]).re;
+    pi /= Complex64::new(trace, 0.0);
+
+    (pi, psi1, psi2, eig_vals)
 }
 
-fn fibonacci_basis(l: usize) -> Vec<u64> {
-    let mut states = Vec::new();
-    for i in 0..(1u64 << l) {
-        if i & (i >> 1) == 0 {
-            let first_bit = (1u64 << 0) & i != 0;
-            let last_bit = (1u64 << (l - 1)) & i != 0;
-            if !(first_bit && last_bit) {
-                states.push(i);
-            }
-        }
-    }
-    states
-}
+fn simulate_trajectory(
+    gamma_p: f64,
+    gamma_m: f64,
+    lambda: f64,
+    s: f64,
+    dt: f64,
+    total_time: f64,
+) -> (Array1<f64>, Array1<usize>, Vec<Array1<Complex64>>) {
+    let (l_plus, l_minus) = create_jump_operators(lambda, s);
 
-fn translationally_invariant_basis(l: usize) -> Basis {
-    let states = fibonacci_basis(l);
-    let mut rep_states = Vec::new();
-    let mut rep_index = HashMap::new();
-    let mut basis_set: HashSet<u64> = states.into_iter().collect();
-
-    while !basis_set.is_empty() {
-        let state = *basis_set.iter().next().unwrap();
-        
-        let mut shifted_states = HashSet::new();
-        for i in 0..l {
-            let shifted = ((state << i) | (state >> (l - i))) & ((1u64 << l) - 1);
-            shifted_states.insert(shifted);
-        }
-        
-        let min_state = *shifted_states.iter().min().unwrap();
-        basis_set = basis_set.difference(&shifted_states).cloned().collect();
-        
-        let translations: Vec<u64> = (0..l)
-            .map(|i| ((min_state << i) | (min_state >> (l - i))) & ((1u64 << l) - 1))
-            .collect();
-        
-        rep_states.push(min_state);
-        rep_index.insert(min_state, translations);
-    }
-
-    Basis { rep_states, rep_index }
-}
-
-fn normalization_factor(l: usize, states: &[u64], k: i64) -> f64 {
-    let mut norm2 = Complex64::new(0.0, 0.0);
-    for j in 0..l {
-        for i in 0..l {
-            if states[j] == states[i] {
-                let phase = 2.0 * PI * (k as f64) * ((j as i64 - i as i64) as f64) / (l as f64);
-                norm2 += Complex64::new(0.0, phase).exp();
-            }
-        }
-    }
-    if norm2.norm() <= THRESHOLD {
-        0.0
+    let h_eff = l_plus.dot(&l_minus).mapv(|x| x * Complex64::new(0.0, -0.5 * gamma_m / s)) 
+    + l_minus.dot(&l_plus).mapv(|x| x * Complex64::new(0.0, -0.5 * gamma_p / s));
+    
+    let (_, psi1, psi2, eigvals) = steady_state(s, lambda, gamma_p, gamma_m);
+    let mut rng = rand::thread_rng();
+    let i = if rng.gen::<f64>() < eigvals[0] { 0 } else { 1 };
+    let mut psi;
+    
+    let steps: usize = (total_time / dt).ceil() as usize;
+    
+    if i == 0 {
+        psi = psi1.clone();
+        psi /= psi.mapv(|e| e.conj()).dot(&psi).sqrt();
     } else {
-        norm2.sqrt().re
+        psi = psi2.clone();
+        psi /= psi.mapv(|e| e.conj()).dot(&psi).sqrt();
     }
+
+    let mut times = Vec::new();
+    let mut types = Vec::new();
+    let mut wfs = Vec::new();
+    
+    
+    let mut r = rng.gen::<f64>();
+    let mut q = rng.gen::<f64>();
+
+    let mut p_p = 1.;
+    let mut p_m = 1.;
+    
+    for i in 0..steps{
+        
+        
+        let amp_m = psi.mapv(|e| e.conj()).dot(&l_plus.dot(&l_minus).dot(&psi));
+        let amp_p = psi.mapv(|e| e.conj()).dot(&l_minus.dot(&l_plus).dot(&psi));
+        
+        let prob_p = (gamma_p / s) * amp_p.re * dt;
+        let prob_m = (gamma_m / s) * amp_m.re * dt;
+        
+        let p_total = prob_p + prob_m;
+        
+        let dpsi_nh = {
+            let h_psi = h_eff.dot(&psi);
+            let p_term = psi.mapv(|x| x * (0.5 * p_total));
+            (&h_psi * Complex64::new(0.0, -1.0))* dt + p_term 
+        };
+        
+        if r >= p_p {
+            let dpsi_j_p = l_plus.dot(&psi).mapv(|x| x / (amp_p.re).sqrt());
+            psi = dpsi_j_p;
+            psi = &psi + &dpsi_nh;
+            psi /= psi.mapv(|e| e.conj()).dot(&psi).sqrt();
+            
+            r = rng.gen::<f64>();
+            
+            p_p = 1.;
+            
+            times.push(i as f64 * dt);
+            types.push(1);
+            wfs.push(psi.clone());
+        } else if q >= p_m {
+            let dpsi_j_m = l_minus.dot(&psi).mapv(|x| x / (amp_m.re).sqrt());
+            psi = dpsi_j_m;
+            psi = &psi + &dpsi_nh;
+            psi /= psi.mapv(|e| e.conj()).dot(&psi).sqrt();
+                        
+            q = rng.gen::<f64>();
+            
+            p_m = 1.;
+
+            times.push(i as f64 * dt);
+            types.push(0);
+            wfs.push(psi.clone());
+        } else {
+            // No jump, just evolve
+            psi = &psi + &dpsi_nh;
+            psi /= psi.mapv(|e| e.conj()).dot(&psi).sqrt();
+        }
+
+
+        p_m *= 1.0 - prob_m;
+        p_p *= 1.0 - prob_p;
+
+
+
+    }
+
+    // Convert times to Array1
+    let times: Array1<f64> = Array1::from(times);
+    let types: Array1<usize> = Array1::from(types);
+
+    (times, types, wfs)
 }
 
-fn inner_product(
-    a_in: &[u64],
-    b_out: &[u64],
-    k_in: i64,
-    k_out: i64,
-    l: usize,
-    norm_a: f64,
-    norm_b: f64,
-) -> Complex64 {
-    if norm_a == 0.0 || norm_b == 0.0 {
-        return Complex64::new(0.0, 0.0);
+
+// fn lindblad_simulation(s: f64, lambda: f64, gamma_p: f64, gamma_m: f64, total_time: f64, dt: f64) -> Vec<f64> {
+//     let max_steps = (total_time / dt).ceil() as usize;
+//     let mut sz_exp = Vec::with_capacity(max_steps);
+
+//     let (l_plus, l_minus) = create_jump_operators(lambda, s);
+
+
+//     // let sigma_pm = sigma_plus.dot(&sigma_minus);
+//     let identity = array![
+//         [Complex64::new(1.0, 0.0), Complex64::new(0.0, 0.0)],
+//         [Complex64::new(0.0, 0.0), Complex64::new(1.0, 0.0)]
+//     ];
+
+//     let v_identity = array![
+//         Complex64::new(1.0, 0.0), Complex64::new(0.0, 0.0),
+//         Complex64::new(0.0, 0.0), Complex64::new(1.0, 0.0)
+//     ];
+
+//     let v_sigma_z = array![
+//         [Complex64::new(1.0, 0.0), Complex64::new(0.0, 0.0), Complex64::new(0.0, 0.0), Complex64::new(0.0, 0.0)],
+//         [Complex64::new(0.0, 0.0), Complex64::new(1.0, 0.0), Complex64::new(0.0, 0.0), Complex64::new(0.0, 0.0)],
+//         [Complex64::new(0.0, 0.0), Complex64::new(0.0, 0.0), Complex64::new(-1.0, 0.0), Complex64::new(0.0, 0.0)],
+//         [Complex64::new(0.0, 0.0), Complex64::new(0.0, 0.0), Complex64::new(0.0, 0.0), Complex64::new(-1.0, 0.0)]
+//     ];
+
+
+//     let term2_m = kron(&l_minus, &l_plus.t());
+//     let term2_p = kron(&l_plus, &l_minus.t());
+
+//     let left_p = l_minus.dot(&l_plus);
+//     let right_p = l_plus.t().dot(&l_minus.t());
+
+//     let left_m = l_plus.dot(&l_minus);
+//     let right_m = l_minus.t().dot(&l_plus.t());
+
+//     let term3_m = (kron(&left_m, &identity) + kron(&identity, &right_m)).mapv(|e| e * 0.5); 
+//     let term3_p = (kron(&left_p, &identity) + kron(&identity, &right_p)).mapv(|e| e * 0.5);
+
+//     let s_l = (&term2_m - &term3_m).mapv(|e| e * gamma_m / s) + (&term2_p - &term3_p).mapv(|e| e * gamma_p / s);
+
+//     let (rho,_,_,_) = steady_state(s, lambda, gamma_p, gamma_m);
+//     let mut v_rho: Array1<Complex64> = rho.iter().cloned().collect();
+
+//     for _ in 0..max_steps {
+//         v_rho = &v_rho + (&s_l.dot(&v_rho)).mapv(|e| e * dt);
+//         v_rho = v_rho.mapv(|e| e / v_identity.dot(&v_rho).re);
+
+//         let szz = v_identity.dot(&v_sigma_z.dot(&v_rho)).re;
+//         sz_exp.push(szz);
+//     }
+
+//     sz_exp
+// }
+
+fn compute_tick_times(
+    types: &Array1<usize>,
+    a_minus: i32,
+    a_plus: i32,
+    m: usize,
+) -> Array1<usize> {
+    let mut n_acc: i32 = 0;
+    let mut aux_ticks = vec![];
+    let mut next_threshold = m;
+
+    for (i, &k) in types.iter().enumerate() {
+        if k == 1 {
+            n_acc += a_plus;
+        } else {
+            n_acc += a_minus;
+        }
+
+        if n_acc >= next_threshold as i32 {
+            aux_ticks.push(i);
+            next_threshold += m;
+        }
+    }
+
+    let aux_ticks: Array1<usize> = Array1::from(aux_ticks);
+    aux_ticks
+}
+
+fn analyze_ticks(
+    times: &Array1<f64>,
+    types: &Array1<usize>,
+    wfs: &Vec<Array1<Complex64>>,
+    aux_ticks: &Array1<usize>,
+    beta: f64,
+    omega_c: f64,
+    pi: &Array2<Complex64>,
+) -> (Vec<f64>, Vec<usize>, Vec<f64>) {
+    let mut waiting_times = Vec::new();
+    let mut activity_ticks = Vec::new();
+    let mut entropy_ticks = Vec::new();
+
+    let ticks = aux_ticks.as_slice().expect("aux_ticks must be contiguous");
+
+    for pair in ticks.windows(2) {
+        if pair.len() != 2 {
+            continue; // Skip incomplete pair
+        }
+        let i1 = pair[0];
+        let i2 = pair[1];
+
+        let t1 = times[i1];
+        let t2 = times[i2];
+
+        let slice_types = &types.slice(s![i1..i2]);
+        let n_plus = slice_types.iter().filter(|&&k| k == 1).count();
+        let n_minus = slice_types.iter().filter(|&&k| k == 0).count();
+
+        let q = omega_c * (n_minus as f64 - n_plus as f64);
+        let beta_q = beta * q;
+
+        let psi1 = &wfs[i1];
+        let psi2 = &wfs[i2];
+
+        let p1 = {
+            let inner = pi.dot(psi1);
+            let amp = psi1.mapv(|c| c.conj()).dot(&inner).re;
+            amp.clamp(1e-12, 1.0)
+        };
+        let p2 = {
+            let inner = pi.dot(psi2);
+            let amp = psi2.mapv(|c| c.conj()).dot(&inner).re;
+            amp.clamp(1e-12, 1.0)
+        };
+
+        let delta_spsi = p1.ln() - p2.ln();
+        let s_tick = delta_spsi + beta_q;
+
+        waiting_times.push(t2 - t1);
+        activity_ticks.push(i2 - i1);
+        entropy_ticks.push(s_tick);
     }
     
-    let mut ip = Complex64::new(0.0, 0.0);
-    for i in 0..l {
-        for j in 0..l {
-            if a_in[i] == b_out[j] {
-                let phase = 2.0 * PI * ((k_out * j as i64 - k_in * i as i64) as f64) / (l as f64);
-                ip += Complex64::new(0.0, phase).exp();
+
+    (waiting_times, activity_ticks, entropy_ticks)
+}
+
+
+fn bin_width(data: &[f64]) -> f64 {
+    if data.is_empty() {
+        return 1.0; // Default bin size if no data
+    }
+
+    fn quantile(data: &[f64], prob: f64) -> f64 {
+        let n = data.len();
+        let idx = prob * (n - 1) as f64;
+        let lo = idx.floor() as usize;
+        let hi = idx.ceil() as usize;
+        if lo == hi {
+            data[lo]
+        } else {
+            let frac = idx - lo as f64;
+            data[lo] * (1.0 - frac) + data[hi] * frac
+        }
+    }
+
+    let q1 = quantile(data, 0.25);
+    let q3 = quantile(data, 0.75);
+    let iqr = q3 - q1;
+    let n = data.len() as f64;
+
+    (2.0 * iqr) / n.cbrt()
+}    
+
+fn counts_per_bin(
+    data: &[f64],
+    bin_width: f64,
+    min: f64,
+    max: f64,
+) -> Vec<f64> {
+    // how many bins?
+    let num_bins = ((max - min) / bin_width).ceil() as usize;
+    let mut counts = vec![0usize; num_bins];
+
+    for &v in data {
+        if v >= min && v <= max {
+            // floor to get bin index
+            let mut idx = ((v - min) / bin_width).floor() as isize;
+            // clamp exact‐max into the last bin
+            if idx == num_bins as isize {
+                idx = num_bins as isize - 1;
+            }
+            if (0..num_bins as isize).contains(&idx) {
+                counts[idx as usize] += 1;
             }
         }
     }
-    
-    ip / (norm_a * norm_b)
+
+    let total_area = counts.iter().sum::<usize>() as f64 * bin_width;
+    counts
+        .into_iter()
+        .map(|c| c as f64 / total_area)
+        .collect()
 }
 
-#[derive(Clone)]
-struct BasisState {
-    states_a: Vec<u64>,
-    states_b: Vec<u64>,
-    k: i64,
-    norm_a: f64,
-    norm_b: f64,
+
+// fn plot_histogram(
+//     counts: &Vec<f64>,
+//     bin_width: f64,
+//     min: f64,
+//     max: f64,
+//     filename: &str,
+// ) -> Result<(), Box<dyn std::error::Error>> {
+
+//     // Set up drawing area
+//     let root = BitMapBackend::new(filename, (1600, 1200)).into_drawing_area();
+//     root.fill(&WHITE)?;
+
+//     let max_count = counts
+//         .iter()
+//         .cloned()
+//         .fold(0.0, f64::max);
+
+
+//     let mut chart = ChartBuilder::on(&root)
+//         .caption("Histogram", ("FiraCode Nerd Font", 40))
+//         .margin(30)
+//         .x_label_area_size(40)
+//         .y_label_area_size(40)
+//         .build_cartesian_2d(min..max, 0.0..max_count)?;
+
+//     chart.configure_mesh()
+//         .x_desc("Value")
+//         .y_desc("Count")
+//         .draw()?;
+
+//     // Draw bars
+//     for (i, &count) in counts.iter().enumerate() {
+//         let x0 = min + i as f64 * bin_width;
+//         let x1 = x0 + bin_width;
+//         chart.draw_series(
+//             std::iter::once(Rectangle::new(
+//                 [(x0, 0.), (x1, count)],
+//                 BLUE.filled(),
+//             )),
+//         )?;
+//     }
+
+//     Ok(())
+// }
+
+// fn plot_trajectory_avg(
+//     // avg_cm: Array1<f64>,
+//     // avg_rj: Array1<f64>,
+//     lindblad_avg: Vec<f64>,
+//     steps: usize,
+//     filename: &str,
+// ) -> Result<(), Box<dyn std::error::Error>> {
+
+//     let root = BitMapBackend::new(&filename, (1600, 1200)).into_drawing_area();
+//     root.fill(&WHITE)?;
+
+//     let min = lindblad_avg
+//         .iter()
+//         .cloned()
+//         .fold(f64::INFINITY, f64::min);
+
+//     let max = lindblad_avg
+//         .iter()
+//         .cloned()
+//         .fold(f64::NEG_INFINITY, f64::max);
+
+//     let mut chart = ChartBuilder::on(&root)
+//         .caption("Average <σ_z> trajectory", ("FiraCode Nerd Font", 30))
+//         .margin(100)
+//         .x_label_area_size(40)
+//         .y_label_area_size(40)
+//         .build_cartesian_2d(0..steps, (1.1 * min)..(1.1* max))?;
+
+//     chart.configure_mesh()
+//         .x_desc("Time steps")
+//         .y_desc("<σ_z>")
+//         .label_style(("FiraCode Nerd Font", 30).into_font())
+//         .draw()?;
+
+
+//     chart.draw_series(LineSeries::new(
+//         lindblad_avg.iter().enumerate().map(|(x, y)| (x, *y)),
+//         &MAGENTA,
+//     ))?
+//     .label("Avg")
+//     .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], &MAGENTA));
+
+//     chart.configure_series_labels()
+//     .position(SeriesLabelPosition::UpperRight)
+//     .label_font(("FiraCode Nerd Font", 40).into_font())
+//     .draw()?;
+
+//     Ok(())
+// }
+
+fn plot_multiple_histogram(
+    counts_val: &[Vec<f64>],
+    bin_width_val: &[f64],
+    total_time: f64,
+    filename_rj: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    assert_eq!(
+        counts_val.len(),
+        bin_width_val.len(),
+        "counts_val and bin_width_val must have the same length"
+    );
+
+    // Compute global max_count across all histograms
+    let global_max = counts_val
+        .iter()
+        .flat_map(|counts| counts.iter())
+        .cloned()
+        .fold(0.0_f64, f64::max);
+
+    // Single drawing area
+    let root = BitMapBackend::new(filename_rj, (1600, 1200)).into_drawing_area();
+    root.fill(&WHITE)?;
+
+    // Build one chart spanning the full area
+    let mut chart = ChartBuilder::on(&root)
+        .caption("Changing both", ("sans-serif", 40))
+        .margin(30)
+        .x_label_area_size(50)
+        .y_label_area_size(60)
+        .build_cartesian_2d(0.0..250.0, 0.0..global_max)?;
+
+    chart
+        .configure_mesh()
+        .x_desc("Time")
+        .y_desc("Count")
+        .draw()?;
+
+    // A palette of base colors (RGBColor refs)
+    let palette = [&RED, &BLUE, &GREEN, &MAGENTA, &CYAN];
+
+    for (idx, (counts, &bin_width)) in
+        counts_val.iter().zip(bin_width_val.iter()).enumerate()
+    {
+        // pick the base color for this series
+        let color = palette[idx % palette.len()];
+
+        // build a semi‑transparent ShapeStyle once
+        let bar_style = color.mix(0.6).filled();
+
+        // draw each bar with that style
+        for (i, &count) in counts.iter().enumerate() {
+            let x0 = i as f64 * bin_width;
+            let x1 = x0 + bin_width;
+            chart.draw_series(std::iter::once(
+                Rectangle::new([(x0, 0.0), (x1, count)], bar_style.clone()),
+            ))?;
+        }
+
+        // add a legend entry using the *same* style
+        chart
+            .draw_series(std::iter::once(Circle::new(
+                (total_time * 0.05, global_max * (0.95 - 0.05 * idx as f64)),
+                5,
+                bar_style.clone(),
+            )))?
+            .label(format!("alpha {}", idx))
+            .legend(move |(x, y)| {
+                Rectangle::new([(x, y - 5), (x + 10, y + 5)], bar_style.clone())
+            });
+    }
+
+    // then draw the legend box once at the end
+    chart
+        .configure_series_labels()
+        .background_style(&WHITE.mix(0.8))
+        .border_style(&BLACK)
+        .draw()?;
+
+    Ok(())
 }
 
-fn build_hamiltonian_parallel(
-    l: usize,
-    basis_states: &[BasisState],
-    q_sector: i64,
-    omega: f64,
-) -> Array2<Complex64> {
-    let dim = basis_states.len();
-    let mut h_cal = Array2::<Complex64>::zeros((dim, dim));
+fn plot_entropy_vs_n_traj(
+    entropies_traj: Vec<f64>,
+    n_traj: Vec<usize>,
+    filename: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    assert_eq!(entropies_traj.len(), n_traj.len());
+
+    // Set up the plot
+    let root = BitMapBackend::new(filename, (1600, 1200)).into_drawing_area();
+    root.fill(&WHITE)?;
+
+    let x_range = *n_traj.iter().min().unwrap() as f64..*n_traj.iter().max().unwrap() as f64;
+    let y_range = entropies_traj
+        .iter()
+        .cloned()
+        .fold(f64::INFINITY..f64::NEG_INFINITY, |acc, v| {
+            acc.start.min(v)..acc.end.max(v)
+        });
+
+    let mut chart = ChartBuilder::on(&root)
+        .caption("Transformed Entropy vs. Number of Trajectories", ("sans-serif", 30))
+        .margin(40)
+        .x_label_area_size(40)
+        .y_label_area_size(60)
+        .build_cartesian_2d(x_range.clone(), y_range.clone())?;
+
+    chart.configure_mesh().draw()?;
+
+    chart.draw_series(LineSeries::new(
+        n_traj.iter().zip(entropies_traj.iter()).map(|(x, y)| (*x as f64, *y)),
+        &RED,
+    ))?;
+
+    Ok(())
+}
+
+// Configuration struct to organize parameters
+#[derive(Debug, Clone)]
+struct SimulationConfig {
+    dt: f64,
+    total_time: f64,
+    steps: usize,
+    omega_c: f64,
+    beta: f64,
+    gamma_p: f64,
+    gamma_m: f64,
+    lambda: f64,
+    s: f64,
+    num_trajectories: usize,
+    m: usize,
+}
+
+// Results struct to organize outputs
+#[derive(Debug)]
+struct SimulationResults {
+    counts_n: Vec<f64>,
+    counts_k: Vec<f64>,
+    counts_q: Vec<f64>,
+    bin_width_n: f64,
+    bin_width_k: f64,
+    bin_width_q: f64,
+    num_ticks_n: usize,
+    num_ticks_k: usize,
+    num_ticks_q: usize,
+    entropy_tick_n: f64,
+    entropy_tick_k: f64,
+    entropy_tick_q: f64,
+    exp_entropy_tick_n: f64,
+    exp_entropy_tick_k: f64,
+    exp_entropy_tick_q: f64,
+    exp_entropy_mar_n: f64,
+    exp_entropy_mar_k: f64,
+    exp_entropy_mar_q: f64,
+    accuracy_n: f64,
+    accuracy_k: f64,
+    accuracy_q: f64,
+    resolution_n: f64,
+    resolution_k: f64,
+    resolution_q: f64,
+    activity_tick_n: f64,
+    activity_tick_k: f64,
+    activity_tick_q: f64,
+}
+
+impl SimulationConfig {
+    fn new(dt: f64, total_time: f64, omega_c: f64, beta: f64, gamma_p: f64, gamma_m: f64, lambda: f64, s: f64, num_trajectories: usize, m: usize) -> Self {
+        let steps = (total_time / dt).ceil() as usize;
+        Self {
+            dt,
+            total_time,
+            steps,
+            omega_c,
+            beta,
+            gamma_p,
+            gamma_m,
+            lambda,
+            s,
+            num_trajectories,
+            m,
+        }
+    }
+}
+
+/// Run a complete quantum jump simulation for given parameters
+fn run_quantum_simulation(config: &SimulationConfig) -> Result<SimulationResults, Box<dyn std::error::Error>> {
     
-    let rows: Vec<_> = (0..dim)
+    let dt = config.dt;
+    let total_time = config.total_time;
+    let steps = config.steps;
+    let omega_c = config.omega_c;
+    let beta = config.beta;
+    let gamma_p = config.gamma_p;
+    let gamma_m = config.gamma_m;
+    let lambda = config.lambda;
+    let s = config.s;
+    let num_trajectories = config.num_trajectories;
+    let m = config.m;
+    
+    
+    // let rho_sz = lindblad_simulation(s, lambda, gamma_p, gamma_m, total_time, dt);
+    // println!("{:?}", rho_norm);
+    
+    // let filename_traj = format!("Avg_trajectory__m-{}_omega_c-{}_dt-{}_tmax-{}_ntraj-{}.png", m, omega_c, dt, total_time, num_trajectories);
+    // plot_trajectory_avg(rho_sz, steps, &filename_traj)?;
+    
+    let (pi, _, _, _) = steady_state(s, lambda, gamma_p, gamma_m);
+    
+    // Create and configure progress bar for trajectories generation
+    let pb_traj = ProgressBar::new(num_trajectories as u64);
+    let tpl = format!(
+        "Running RJ {}, {}, {}, {}: [{{bar:40.green/black}}] {{pos}}/{{len}} ({{eta}})",
+        config.s, config.lambda, num_trajectories, m
+    );
+    pb_traj.set_style(
+        ProgressStyle::default_bar()
+            .template(&tpl)
+            .unwrap(),
+    );
+    
+    // 2) Phase 1: simulate in parallel, updating the bar
+    let trajectories: Vec<(Array1<f64>, Array1<usize>, Vec<Array1<Complex64>>)> = (0..num_trajectories)
+    .into_par_iter()
+    .map_init(
+        // `pb_traj.clone()` here is cheap & thread‑safe
+        || pb_traj.clone(),
+        |pb, _| {
+            let traj = simulate_trajectory(gamma_p, gamma_m, lambda, s, dt, total_time);
+            pb.inc(1);
+            traj
+        },
+    )
+    .filter(|(times, _, _)| times.len() >= 2)
+    .collect();
+    
+    pb_traj.finish_with_message("Simulation complete.");
+    
+    
+    // Create and configure progress bar for data analysis
+    let pb_analyze = ProgressBar::new(trajectories.len() as u64);
+    pb_analyze.set_style(
+        ProgressStyle::default_bar()
+        .template("Analyzing: [{bar:40.magenta/black}] {pos}/{len} ({eta})")
+        .unwrap(),
+    );
+    
+
+    // 2) Phase 2: analyze each trajectory in parallel with progress updates
+    // Considering accumulated emissions
+    let a_minus: i32 = 1; // Weight for emission
+    let a_plus: i32 = 0; // Weight for absorption
+    let results_n: Vec<(Vec<f64>, Vec<usize>, Vec<f64>)> = 
+        trajectories
+            .par_iter()                    // iterate by reference, so `trajectories` is not consumed
+            .map_init(
+                || pb_analyze.clone(),     // each thread gets its own progress bar clone
+                |pb, traj| {
+                    let (times, types, wfs) = traj;
+                    let aux_ticks = compute_tick_times(&types, a_minus, a_plus, m);
+                    pb.inc(1);
+                    if aux_ticks.len() > 1 {
+                        Some(analyze_ticks(&times, &types, &wfs, &aux_ticks, beta, omega_c, &pi))
+                    } else {
+                        None
+                    }
+                },
+            )
+            .filter_map(|res| res)
+            .collect();
+
+    // Considering dynamical activity
+    let a_minus: i32 = 1; // Weight for emission
+    let a_plus: i32 = 1; // Weight for absorption
+    let results_k: Vec<(Vec<f64>, Vec<usize>, Vec<f64>)> = 
+        trajectories
+            .par_iter()                    // iterate by reference, so `trajectories` is not consumed
+            .map_init(
+                || pb_analyze.clone(),     // each thread gets its own progress bar clone
+                |pb, traj| {
+                    let (times, types, wfs) = traj;
+                    let aux_ticks = compute_tick_times(&types, a_minus, a_plus, m);
+                    pb.inc(1);
+                    if aux_ticks.len() > 1 {
+                        Some(analyze_ticks(&times, &types, &wfs, &aux_ticks, beta, omega_c, &pi))
+                    } else {
+                        None
+                    }
+                },
+            )
+            .filter_map(|res| res)
+            .collect();    
+
+    // Considering dissipated heat current
+    let a_minus: i32 = 1; // Weight for emission
+    let a_plus: i32 = -1; // Weight for absorption
+    let results_q: Vec<(Vec<f64>, Vec<usize>, Vec<f64>)> = trajectories
         .into_par_iter()
-        .map(|j| {
-            let mut row = vec![Complex64::new(0.0, 0.0); dim];
-            
-            for i in 0..dim {
-                let state_in = &basis_states[i];
-                let state_out = &basis_states[j];
-                
-                for site in 0..l {
-                    let states_a_h_in: Vec<u64> = state_in.states_a
-                        .iter()
-                        .map(|&s| s ^ (1u64 << site))
-                        .collect();
-                    let states_b_h_in: Vec<u64> = state_in.states_b
-                        .iter()
-                        .map(|&s| s ^ (1u64 << site))
-                        .collect();
-                    
-                    let mut a_prod = Complex64::new(0.0, 0.0);
-                    for ii in 0..l {
-                        for jj in 0..l {
-                            let cond1 = states_a_h_in[ii] == state_out.states_a[jj];
-                            let cond2 = (states_a_h_in[ii] & (1u64 << ((site + l - 1) % l))) == 0;
-                            let cond3 = (states_a_h_in[ii] & (1u64 << ((site + 1) % l))) == 0;
-                            
-                            if cond1 && cond2 && cond3 {
-                                let phase = 2.0 * PI * ((state_out.k * jj as i64 - state_in.k * ii as i64) as f64) / (l as f64);
-                                a_prod += Complex64::new(0.0, phase).exp();
-                            }
-                        }
-                    }
-                    a_prod /= state_in.norm_a * state_out.norm_a;
-                    
-                    let mut b_prod = Complex64::new(0.0, 0.0);
-                    for ii in 0..l {
-                        for jj in 0..l {
-                            let cond1 = states_b_h_in[ii] == state_out.states_b[jj];
-                            let cond2 = (states_b_h_in[ii] & (1u64 << ((site + l - 1) % l))) == 0;
-                            let cond3 = (states_b_h_in[ii] & (1u64 << ((site + 1) % l))) == 0;
-                            
-                            if cond1 && cond2 && cond3 {
-                                let k_diff_out = state_out.k - q_sector;
-                                let k_diff_in = state_in.k - q_sector;
-                                let phase = 2.0 * PI * ((-k_diff_out * jj as i64 + k_diff_in * ii as i64) as f64) / (l as f64);
-                                b_prod += Complex64::new(0.0, phase).exp();
-                            }
-                        }
-                    }
-                    b_prod /= state_in.norm_b * state_out.norm_b;
-                    
-                    let inner_b = inner_product(
-                        &state_out.states_b,
-                        &state_in.states_b,
-                        state_out.k - q_sector,
-                        state_in.k - q_sector,
-                        l,
-                        state_out.norm_b,
-                        state_in.norm_b,
-                    );
-                    
-                    let inner_a = inner_product(
-                        &state_in.states_a,
-                        &state_out.states_a,
-                        state_in.k,
-                        state_out.k,
-                        l,
-                        state_in.norm_a,
-                        state_out.norm_a,
-                    );
-                    
-                    row[i] += Complex64::new(0.0, -omega) * (a_prod * inner_b - inner_a * b_prod);
+        .map_init(
+            // `pb_analyze.clone()` is cheap & thread‑safe
+            || pb_analyze.clone(),
+            |pb, (times, types, wfs)| {
+                let aux_ticks = compute_tick_times(&types, a_minus, a_plus, m);
+                pb.inc(1);
+                if aux_ticks.len() > 1 {
+                    Some(analyze_ticks(&times, &types, &wfs, &aux_ticks, beta, omega_c, &pi))
+                } else {
+                    None
                 }
-            }
-            row
+            },
+        )
+        .filter_map(|res| res)
+        .collect();
+
+    pb_analyze.finish_with_message("Analysis complete.");
+
+    // Combine all results collective emissons
+    let mut waits_n = Vec::new();        // flattened for histogram
+    let mut activities_n = Vec::new(); // one avg per trajectory
+    let mut entropies_n = Vec::new(); // one avg per trajectory
+
+    for (wts, acts, ents) in results_n {
+        waits_n.extend(wts); // flatten all waits
+
+        activities_n.extend(acts); // flatten all activities
+
+        entropies_n.extend(ents); // flatten all entropies
+    }
+
+    let arr_ent_n = Array1::from(entropies_n); // assuming entropies: Vec<f64>
+    let mean_ent_n = arr_ent_n.mean().unwrap_or(0.0); // Mean of entropies
+    let exp_entropy_tick_n = (arr_ent_n.mapv(|e| (-e).exp()).sum().ln() - (arr_ent_n.len() as f64).ln()).exp();
+
+    let arr_act_n: Array1<f64> = Array1::from_iter(activities_n.iter().map(|&x| x as f64));
+    let mean_act_n = arr_act_n.mean().unwrap_or(0.0); // Mean of entropies
+
+
+    // Combine all results dynamical activity
+    let mut waits_k = Vec::new();        // flattened for histogram
+    let mut activities_k = Vec::new(); // one avg per trajectory
+    let mut entropies_k = Vec::new(); // one avg per trajectory
+
+    for (wts, acts, ents) in results_k {
+        waits_k.extend(wts); // flatten all waits
+
+        activities_k.extend(acts); // flatten all activities
+
+        entropies_k.extend(ents); // flatten all entropies
+    }
+
+    let arr_ent_k = Array1::from(entropies_k); // assuming entropies: Vec<f64>
+    let mean_ent_k = arr_ent_k.mean().unwrap_or(0.0); // Mean of entropies
+    let exp_entropy_tick_k = (arr_ent_k.mapv(|e| (-e).exp()).sum().ln() - (arr_ent_k.len() as f64).ln()).exp() ;
+
+    let arr_act_k: Array1<f64> = Array1::from_iter(activities_k.iter().map(|&x| x as f64));
+    let mean_act_k = arr_act_k.mean().unwrap_or(0.0); // Mean of entropies
+
+
+    // Combine all results dynamical activity
+    let mut waits_q = Vec::new();        // flattened for histogram
+    let mut activities_q = Vec::new(); // one avg per trajectory
+    let mut entropies_q = Vec::new(); // one avg per trajectory
+
+    for (wts, acts, ents) in results_q {
+        waits_q.extend(wts); // flatten all waits
+
+        activities_q.extend(acts); // flatten all activities
+
+        entropies_q.extend(ents); // flatten all entropies
+    }
+
+    let arr_ent_q = Array1::from(entropies_q); // assuming entropies: Vec<f64>
+    let mean_ent_q = arr_ent_q.mean().unwrap_or(0.0); // Mean of entropies
+    let exp_entropy_tick_q = (arr_ent_q.mapv(|e| (-e).exp()).sum().ln() - (arr_ent_q.len() as f64).ln()).exp() ;
+
+    let arr_act_q: Array1<f64> = Array1::from_iter(activities_q.iter().map(|&x| x as f64));
+    let mean_act_q = arr_act_q.mean().unwrap_or(0.0); // Mean of entropies
+
+    // Compute accuracies and resolutions
+    let mean_waits_n = waits_n.iter().copied().sum::<f64>() / waits_n.len() as f64;
+    let var_waits_n = waits_n.iter().map(|x| (x - mean_waits_n).powi(2)).sum::<f64>() / (waits_n.len() as f64 - 1.0);
+    let accuracy_n = mean_waits_n.powi(2) / var_waits_n; 
+    let resolution_n = 1.0 / mean_waits_n;
+
+    let mean_waits_k = waits_k.iter().copied().sum::<f64>() / waits_k.len() as f64;
+    let var_waits_k = waits_k.iter().map(|x| (x - mean_waits_k).powi(2)).sum::<f64>() / (waits_k.len() as f64 - 1.0);
+    let accuracy_k = mean_waits_k.powi(2) / var_waits_k; 
+    let resolution_k = 1.0 / mean_waits_k;
+
+    let mean_waits_q = waits_q.iter().copied().sum::<f64>() / waits_q.len() as f64;
+    let var_waits_q = waits_q.iter().map(|x| (x - mean_waits_q).powi(2)).sum::<f64>() / (waits_q.len() as f64 - 1.0);
+    let accuracy_q = mean_waits_q.powi(2) / var_waits_q;  
+    let resolution_q = 1.0 / mean_waits_q;
+
+    // --- 2. Sort the waiting times ---
+    let mut sorted_waits_n = waits_n;
+    let mut sorted_waits_k = waits_k;
+    let mut sorted_waits_q = waits_q;
+
+    sorted_waits_n.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    sorted_waits_k.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    sorted_waits_q.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    
+    // --- 3. Compute bin width using IQR rule ---
+    let bw_n = bin_width(&sorted_waits_n);
+    let bw_k = bin_width(&sorted_waits_k);
+    let bw_q = bin_width(&sorted_waits_q);
+    
+    // --- 4. Determine range ---
+    let min = *sorted_waits_n.first().unwrap_or(&0.0);
+    let max = *sorted_waits_n.last().unwrap_or(&1.0);
+    
+    // --- 5. Count frequencies per bin ---
+    let counts_n = counts_per_bin(&sorted_waits_n, bw_n, min, max);
+    let counts_k = counts_per_bin(&sorted_waits_k, bw_n, min, max);
+    let counts_q = counts_per_bin(&sorted_waits_q, bw_n, min, max);
+    
+    // --- 6. Plot histogram ---
+    // let filename = format!("WTD-histogram__m-{}_omega_c-{}_dt-{}_tmax-{}_ntraj-{}.png", m, omega_c, dt, total_time, num_trajectories);
+    // plot_histogram(&counts_n, bw_n, min, max, &filename)?;
+
+    Ok(SimulationResults {
+        counts_n: counts_n,
+        counts_k: counts_k,
+        counts_q: counts_q,
+        bin_width_n: bw_n,
+        bin_width_k: bw_k,
+        bin_width_q: bw_q,
+        num_ticks_n: sorted_waits_n.len(),
+        num_ticks_k: sorted_waits_k.len(),
+        num_ticks_q: sorted_waits_q.len(),
+        entropy_tick_n: mean_ent_n,
+        entropy_tick_k: mean_ent_k,
+        entropy_tick_q: mean_ent_q,
+        exp_entropy_tick_n: exp_entropy_tick_n,
+        exp_entropy_tick_k: exp_entropy_tick_k,
+        exp_entropy_tick_q: exp_entropy_tick_q,
+        exp_entropy_mar_n: 0.0, // Placeholder, not calculated
+        exp_entropy_mar_k: 0.0, // Placeholder, not calculated
+        exp_entropy_mar_q: 0.0, // Placeholder, not calculated
+        accuracy_n: accuracy_n,
+        accuracy_k: accuracy_k,
+        accuracy_q: accuracy_q,
+        resolution_n: resolution_n,
+        resolution_k: resolution_k,
+        resolution_q: resolution_q,
+        activity_tick_n: mean_act_n,// Placeholder, not calculated
+        activity_tick_k: mean_act_k,// Placeholder, not calculated
+        activity_tick_q: mean_act_q,// Placeholder, not calculated
+    })
+}
+
+fn generate_parameter_vectors(n_pts: usize) -> (Vec<f64>, Vec<f64>, Vec<usize>, Vec<usize>) {
+    let init_s = 50.0_f64;
+    let last_s = 50.0_f64;
+    let vec_omega: Vec<f64> = (0..n_pts)
+        .map(|i| {
+            let t = i as f64 / (n_pts - 1) as f64;
+            init_s + t * (last_s - init_s)
+        })
+        .collect();
+
+    let init_lambda = 2.0_f64;
+    let last_lambda = 2.0_f64;
+    let vec_gamma: Vec<f64> = (0..n_pts)
+        .map(|i| {
+            let t = i as f64 / (n_pts - 1) as f64;
+            init_lambda + t * (last_lambda - init_lambda)
+        })
+        .collect();
+
+    let init_num_trajectories = 100_usize;
+    let last_num_trajectories = 1000_usize;
+    let vec_num_trajectories: Vec<usize> = (0..n_pts)
+        .map(|i| {
+            let t = i as f64 / (n_pts - 1) as f64;
+            (init_num_trajectories as f64 + t * (last_num_trajectories - init_num_trajectories) as f64) as usize
+        })
+        .collect();
+
+    let init_m = 5_usize;
+    let last_m = 5_usize;
+    let vec_m: Vec<usize> = (0..n_pts)
+        .map(|i| {
+            let t = i as f64 / (n_pts - 1) as f64;
+            (init_m as f64 + t * (last_m - init_m) as f64) as usize
         })
         .collect();
     
-    for (j, row) in rows.into_iter().enumerate() {
-        for (i, val) in row.into_iter().enumerate() {
-            h_cal[[j, i]] = val;
-        }
-    }
-    
-    h_cal
+    // let vec_m: Vec<usize> = vec![355, 650, 705, 1100];      // Values for figure A2
+
+    (vec_omega, vec_gamma, vec_num_trajectories, vec_m)
 }
 
-fn build_dissipation_parallel(
-    l: usize,
-    basis_states: &[BasisState],
-    q_sector: i64,
-    gamma_plus: f64,
-    gamma_minus: f64,
-) -> Array2<Complex64> {
-    let dim = basis_states.len();
-    let mut d_cal = Array2::<Complex64>::zeros((dim, dim));
-    
-    let rows: Vec<_> = (0..dim)
-        .into_par_iter()
-        .map(|j| {
-            let mut row = vec![Complex64::new(0.0, 0.0); dim];
-            
-            for i in 0..dim {
-                let state_in = &basis_states[i];
-                let state_out = &basis_states[j];
-                
-                let inner_b = inner_product(
-                    &state_out.states_b,
-                    &state_in.states_b,
-                    state_out.k - q_sector,
-                    state_in.k - q_sector,
-                    l,
-                    state_out.norm_b,
-                    state_in.norm_b,
-                );
-                
-                let inner_a = inner_product(
-                    &state_in.states_a,
-                    &state_out.states_a,
-                    state_in.k,
-                    state_out.k,
-                    l,
-                    state_in.norm_a,
-                    state_out.norm_a,
-                );
-                
-                for site in 0..l {
-                    let states_a_l_in: Vec<u64> = state_in.states_a
-                        .iter()
-                        .map(|&s| s ^ (1u64 << site))
-                        .collect();
-                    let states_b_l_out: Vec<u64> = state_out.states_b
-                        .iter()
-                        .map(|&s| s ^ (1u64 << site))
-                        .collect();
-                    
-                    // L_PLUS operators
-                    let mut a_plus = Complex64::new(0.0, 0.0);
-                    for ii in 0..l {
-                        for jj in 0..l {
-                            let c1 = states_a_l_in[ii] == state_out.states_a[jj];
-                            let c2 = (states_a_l_in[ii] & (1u64 << ((site + l - 1) % l))) == 0;
-                            let c3 = (states_a_l_in[ii] & (1u64 << ((site + 1) % l))) == 0;
-                            let c4 = (state_in.states_a[ii] & (1u64 << (site % l))) == 0;
-                            if c1 && c2 && c3 && c4 {
-                                let phase = 2.0 * PI * ((state_out.k * jj as i64 - state_in.k * ii as i64) as f64) / (l as f64);
-                                a_plus += Complex64::new(0.0, phase).exp();
-                            }
-                        }
-                    }
-                    a_plus /= state_in.norm_a * state_out.norm_a;
-                    
-                    let mut b_plus = Complex64::new(0.0, 0.0);
-                    for ii in 0..l {
-                        for jj in 0..l {
-                            let c1 = states_b_l_out[ii] == state_in.states_b[jj];
-                            let c2 = (states_b_l_out[ii] & (1u64 << ((site + l - 1) % l))) == 0;
-                            let c3 = (states_b_l_out[ii] & (1u64 << ((site + 1) % l))) == 0;
-                            let c4 = (states_b_l_out[ii] & (1u64 << (site % l))) == 0;
-                            if c1 && c2 && c3 && c4 {
-                                let k_diff_out = state_out.k - q_sector;
-                                let k_diff_in = state_in.k - q_sector;
-                                let phase = 2.0 * PI * ((-k_diff_out * ii as i64 + k_diff_in * jj as i64) as f64) / (l as f64);
-                                b_plus += Complex64::new(0.0, phase).exp();
-                            }
-                        }
-                    }
-                    b_plus /= state_in.norm_b * state_out.norm_b;
-                    
-                    let mut aa_plus = Complex64::new(0.0, 0.0);
-                    for ii in 0..l {
-                        for jj in 0..l {
-                            let c1 = state_in.states_a[ii] == state_out.states_a[jj];
-                            let c2 = (state_in.states_a[ii] & (1u64 << ((site + l - 1) % l))) == 0;
-                            let c3 = (state_in.states_a[ii] & (1u64 << ((site + 1) % l))) == 0;
-                            let c4 = (state_in.states_a[ii] & (1u64 << (site % l))) == 0;
-                            if c1 && c2 && c3 && c4 {
-                                let phase = 2.0 * PI * ((state_out.k * jj as i64 - state_in.k * ii as i64) as f64) / (l as f64);
-                                aa_plus += Complex64::new(0.0, phase).exp();
-                            }
-                        }
-                    }
-                    aa_plus /= state_in.norm_a * state_out.norm_a;
-                    
-                    let mut bb_plus = Complex64::new(0.0, 0.0);
-                    for ii in 0..l {
-                        for jj in 0..l {
-                            let c1 = state_out.states_b[ii] == state_in.states_b[jj];
-                            let c2 = (state_out.states_b[ii] & (1u64 << ((site + l - 1) % l))) == 0;
-                            let c3 = (state_out.states_b[ii] & (1u64 << ((site + 1) % l))) == 0;
-                            let c4 = (state_out.states_b[ii] & (1u64 << (site % l))) == 0;
-                            if c1 && c2 && c3 && c4 {
-                                let k_diff_out = state_out.k - q_sector;
-                                let k_diff_in = state_in.k - q_sector;
-                                let phase = 2.0 * PI * ((-k_diff_out * ii as i64 + k_diff_in * jj as i64) as f64) / (l as f64);
-                                bb_plus += Complex64::new(0.0, phase).exp();
-                            }
-                        }
-                    }
-                    bb_plus /= state_in.norm_b * state_out.norm_b;
-                    
-                    row[i] += gamma_plus * (a_plus * b_plus - 0.5 * aa_plus * inner_b - 0.5 * inner_a * bb_plus);
-                    
-                    // L_MINUS operators
-                    let mut a_minus = Complex64::new(0.0, 0.0);
-                    for ii in 0..l {
-                        for jj in 0..l {
-                            let c1 = states_a_l_in[ii] == state_out.states_a[jj];
-                            let c2 = (states_a_l_in[ii] & (1u64 << ((site + l - 1) % l))) == 0;
-                            let c3 = (states_a_l_in[ii] & (1u64 << ((site + 1) % l))) == 0;
-                            let c4 = (states_a_l_in[ii] & (1u64 << (site % l))) == 0;
-                            if c1 && c2 && c3 && c4 {
-                                let phase = 2.0 * PI * ((state_out.k * jj as i64 - state_in.k * ii as i64) as f64) / (l as f64);
-                                a_minus += Complex64::new(0.0, phase).exp();
-                            }
-                        }
-                    }
-                    a_minus /= state_in.norm_a * state_out.norm_a;
-                    
-                    let mut b_minus = Complex64::new(0.0, 0.0);
-                    for ii in 0..l {
-                        for jj in 0..l {
-                            let c1 = states_b_l_out[ii] == state_in.states_b[jj];
-                            let c2 = (states_b_l_out[ii] & (1u64 << ((site + l - 1) % l))) == 0;
-                            let c3 = (states_b_l_out[ii] & (1u64 << ((site + 1) % l))) == 0;
-                            let c4 = (state_out.states_b[ii] & (1u64 << (site % l))) == 0;
-                            if c1 && c2 && c3 && c4 {
-                                let k_diff_out = state_out.k - q_sector;
-                                let k_diff_in = state_in.k - q_sector;
-                                let phase = 2.0 * PI * ((-k_diff_out * ii as i64 + k_diff_in * jj as i64) as f64) / (l as f64);
-                                b_minus += Complex64::new(0.0, phase).exp();
-                            }
-                        }
-                    }
-                    b_minus /= state_in.norm_b * state_out.norm_b;
-                    
-                    let mut aa_minus = Complex64::new(0.0, 0.0);
-                    for ii in 0..l {
-                        for jj in 0..l {
-                            let c1 = state_in.states_a[ii] == state_out.states_a[jj];
-                            let c2 = (state_in.states_a[ii] & (1u64 << ((site + l - 1) % l))) == 0;
-                            let c3 = (state_in.states_a[ii] & (1u64 << ((site + 1) % l))) == 0;
-                            let c4 = (states_a_l_in[ii] & (1 << (site % l))) == 0;
-                            if c1 && c2 && c3 && c4 {
-                                let phase = 2.0 * PI * ((state_out.k * jj as i64 - state_in.k * ii as i64) as f64) / (l as f64);
-                                aa_minus += Complex64::new(0.0, phase).exp();
-                            }
-                        }
-                    }
-                    aa_minus /= state_in.norm_a * state_out.norm_a;
-                    
-                    let mut bb_minus = Complex64::new(0.0, 0.0);
-                    for ii in 0..l {
-                        for jj in 0..l {
-                            let c1 = state_out.states_b[ii] == state_in.states_b[jj];
-                            let c2 = (state_out.states_b[ii] & (1u64 << ((site + l - 1) % l))) == 0;
-                            let c3 = (state_out.states_b[ii] & (1u64 << ((site + 1) % l))) == 0;
-                            let c4 = (states_b_l_out[ii] & (1u64 << (site % l))) == 0;
-                            if c1 && c2 && c3 && c4 {
-                                let k_diff_out = state_out.k - q_sector;
-                                let k_diff_in = state_in.k - q_sector;
-                                let phase = 2.0 * PI * ((-k_diff_out * ii as i64 + k_diff_in * jj as i64) as f64) / (l as f64);
-                                bb_minus += Complex64::new(0.0, phase).exp();
-                            }
-                        }
-                    }
-                    bb_minus /= state_in.norm_b * state_out.norm_b;
-                    
-                    row[i] += gamma_minus * (a_minus * b_minus - 0.5 * aa_minus * inner_b - 0.5 * inner_a * bb_minus);
-                }
-            }
-            row
-        })
-        .collect();
-    
-    for (j, row) in rows.into_iter().enumerate() {
-        for (i, val) in row.into_iter().enumerate() {
-            d_cal[[j, i]] = val;
-        }
-    }
-    
-    d_cal
-}
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let l = 6;
-    let q_sector = 0;
-    let omega = 2.0;
-    let gamma_plus = 1.0;
-    let gamma_minus = 0.5;
+fn main() -> Result<(), Box<dyn std::error::Error>>{
+    // Fixed simulation parameters
+    let dt: f64 = 0.01;
+    let total_time: f64 = 5000.0;        // Total time 5000 set it to have an average of 20 ticks for a threshold of 1100 and beta 2.0
+    let omega_c: f64 = 0.01; // Frequency scale
+    let beta: f64 = 0.1 / omega_c; // Inverse temperature
+    let betawc = beta * omega_c;
+    let gamma_z = 1. ;// 1./1000.*omega_c;
+    let nb = 1./(betawc.exp() - 1.);
     
-    println!("=== Lindbladian Solver ===");
-    println!("L = {}, Q_sector = {}", l, q_sector);
-    println!("Omega = {}, γ+ = {}, γ- = {}", omega, gamma_plus, gamma_minus);
-    println!("\nGenerating basis...");
-    
-    let basis = translationally_invariant_basis(l);
-    println!("Representative states: {}", basis.rep_states.len());
-    
-    let mut basis_per_sector: HashMap<i64, Vec<u64>> = HashMap::new();
-    for k_sector in 0..l as i64 {
-        for &state in &basis.rep_states {
-            if let Some(translations) = basis.rep_index.get(&state) {
-                let norm = normalization_factor(l, translations, k_sector);
-                if norm > 0.0 {
-                    basis_per_sector.entry(k_sector).or_insert_with(Vec::new).push(state);
-                }
-            }
-        }
+    let n_pts = 20_usize;
+
+    // Generate parameter vectors
+    let (vec_s, vec_lambda, vec_num_trajectories, vec_m) = generate_parameter_vectors(n_pts);
+
+    println!("Running simulations with S: {:?}, lambda: {:?}, n_traj: {:?} and M: {:?}", vec_s, vec_lambda, vec_num_trajectories, vec_m);
+
+    // Pre-allocate result vectors
+    let mut counts_n_set: Vec<Vec<f64>> = Vec::with_capacity(n_pts);
+    let mut counts_k_set: Vec<Vec<f64>> = Vec::with_capacity(n_pts);
+    let mut counts_q_set: Vec<Vec<f64>> = Vec::with_capacity(n_pts);
+    let mut bin_width_n_set: Vec<f64> = Vec::with_capacity(n_pts);
+    let mut bin_width_k_set: Vec<f64> = Vec::with_capacity(n_pts);
+    let mut bin_width_q_set: Vec<f64> = Vec::with_capacity(n_pts);
+    let mut num_ticks_n_set: Vec<usize> = Vec::with_capacity(n_pts);
+    let mut num_ticks_k_set: Vec<usize> = Vec::with_capacity(n_pts);
+    let mut num_ticks_q_set: Vec<usize> = Vec::with_capacity(n_pts);
+    let mut entropys_tick_n_set: Vec<f64> = Vec::with_capacity(n_pts);
+    let mut entropys_tick_k_set: Vec<f64> = Vec::with_capacity(n_pts);
+    let mut entropys_tick_q_set: Vec<f64> = Vec::with_capacity(n_pts);
+    let mut exp_entropy_tick_n_set: Vec<f64> = Vec::with_capacity(n_pts);
+    let mut exp_entropy_tick_k_set: Vec<f64> = Vec::with_capacity(n_pts);
+    let mut exp_entropy_tick_q_set: Vec<f64> = Vec::with_capacity(n_pts);
+    let mut exp_entropy_mar_n_set: Vec<f64> = Vec::with_capacity(n_pts);
+    let mut exp_entropy_mar_k_set: Vec<f64> = Vec::with_capacity(n_pts);
+    let mut exp_entropy_mar_q_set: Vec<f64> = Vec::with_capacity(n_pts);
+    let mut accuracy_n_set: Vec<f64> = Vec::with_capacity(n_pts);
+    let mut accuracy_k_set: Vec<f64> = Vec::with_capacity(n_pts);
+    let mut accuracy_q_set: Vec<f64> = Vec::with_capacity(n_pts);
+    let mut resolution_n_set: Vec<f64> = Vec::with_capacity(n_pts);
+    let mut resolution_k_set: Vec<f64> = Vec::with_capacity(n_pts);
+    let mut resolution_q_set: Vec<f64> = Vec::with_capacity(n_pts);
+    let mut activity_tick_n_set: Vec<f64> = Vec::with_capacity(n_pts);
+    let mut activity_tick_k_set: Vec<f64> = Vec::with_capacity(n_pts);
+    let mut activity_tick_q_set: Vec<f64> = Vec::with_capacity(n_pts);
+
+    // Run simulations
+    for (((&s, &lambda), &num_trajectories), &m) in vec_s.iter().zip(vec_lambda.iter()).zip(vec_num_trajectories.iter()).zip(vec_m.iter()) 
+    {
+        let gamma_p: f64 = gamma_z/s * nb;
+        let gamma_m: f64 = gamma_z/s * ( nb + 1.);
+
+        let config = SimulationConfig::new(dt, total_time, omega_c, beta, gamma_p, gamma_m, lambda, s, num_trajectories, m);
+
+        let results = run_quantum_simulation(&config)?;
+
+        // Store results
+        counts_n_set.push(results.counts_n);
+        counts_k_set.push(results.counts_k);
+        counts_q_set.push(results.counts_q);
+        bin_width_n_set.push(results.bin_width_n);
+        bin_width_k_set.push(results.bin_width_k);
+        bin_width_q_set.push(results.bin_width_q);
+        num_ticks_n_set .push(results.num_ticks_n);
+        num_ticks_k_set .push(results.num_ticks_k);
+        num_ticks_q_set .push(results.num_ticks_q);
+        entropys_tick_n_set.push(results.entropy_tick_n);
+        entropys_tick_k_set.push(results.entropy_tick_k);
+        entropys_tick_q_set.push(results.entropy_tick_q);
+        exp_entropy_tick_n_set.push(results.exp_entropy_tick_n);
+        exp_entropy_tick_k_set.push(results.exp_entropy_tick_k);
+        exp_entropy_tick_q_set.push(results.exp_entropy_tick_q);
+        exp_entropy_mar_n_set.push(results.exp_entropy_mar_n);
+        exp_entropy_mar_k_set.push(results.exp_entropy_mar_k);
+        exp_entropy_mar_q_set.push(results.exp_entropy_mar_q);
+        accuracy_n_set.push(results.accuracy_n);
+        accuracy_k_set.push(results.accuracy_k);
+        accuracy_q_set.push(results.accuracy_q);
+        resolution_n_set.push(results.resolution_n);
+        resolution_k_set.push(results.resolution_k);
+        resolution_q_set.push(results.resolution_q);
+        activity_tick_n_set.push(results.activity_tick_n);
+        activity_tick_k_set.push(results.activity_tick_k);
+        activity_tick_q_set.push(results.activity_tick_q);
     }
-    
-    let mut basis_states = Vec::new();
-    for k in 0..l as i64 {
-        if let Some(states_in_sector) = basis_per_sector.get(&k) {
-            for &state_a in states_in_sector {
-                for &state_b in states_in_sector {
-                    let states_a = basis.rep_index.get(&state_a).unwrap().clone();
-                    let states_b = basis.rep_index.get(&state_b).unwrap().clone();
-                    let norm_a = normalization_factor(l, &states_a, k);
-                    let norm_b = normalization_factor(l, &states_b, k);
-                    
-                    basis_states.push(BasisState {
-                        states_a,
-                        states_b,
-                        k,
-                        norm_a,
-                        norm_b,
-                    });
-                }
-            }
-        }
-    }
-    
-    let dimension = basis_states.len();
-    println!("Total dimension: {}\n", dimension);
-    
-    println!("Building Hamiltonian matrix...");
-    let h_cal = build_hamiltonian_parallel(l, &basis_states, q_sector, omega);
-    println!("✓ Hamiltonian complete!");
-    
-    println!("\nBuilding Dissipation matrix...");
-    let d_cal = build_dissipation_parallel(l, &basis_states, q_sector, gamma_plus, gamma_minus);
-    println!("✓ Dissipation complete!");
-    
-    println!("\nCombining Lindbladian...");
-    let l_cal = h_cal + d_cal;
-    println!("✓ Lindbladian complete!");
-    
-    println!("\nComputing eigenvalues...");
-    match l_cal.eig() {
-        Ok((eigenvalues, _eigenvectors)) => {
-            println!("✓ Eigenvalues computed ({} values)\n", eigenvalues.len());
-            
-            // Write to CSV
-            let mut file = File::create("eigenvalues.csv")?;
-            writeln!(file, "real,imaginary")?;
-            for eval in eigenvalues.iter() {
-                writeln!(file, "{},{}", eval.re, eval.im)?;
-            }
-            println!("✓ Eigenvalues saved to eigenvalues.csv");
-            
-            // Print first 10 eigenvalues
-            println!("\nFirst 10 eigenvalues:");
-            for (i, eval) in eigenvalues.iter().take(10).enumerate() {
-                println!("  λ_{:<2} = {:>12.6} + {:>12.6}i", i, eval.re, eval.im);
-            }
-        }
-        Err(e) => {
-            eprintln!("Error: Eigenvalue computation failed: {:?}", e);
-        }
-    }
-    
-    println!("\n=== Done! ===");
+
+    // plot_multiple_histogram(&counts_n_set, &bin_width_n_set, total_time, "Prueba.png")?;
+
+    plot_entropy_vs_n_traj(exp_entropy_tick_n_set, num_ticks_n_set, "entropy_vs_n_traj.png")?;
+
+    // println!("{:?}", num_ticks_n_set);
+
+    println!("Simulation completed successfully!");
+
+
     Ok(())
 }
