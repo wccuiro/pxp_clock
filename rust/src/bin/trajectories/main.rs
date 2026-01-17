@@ -4,11 +4,13 @@ use num_complex::Complex64;
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::f64::consts::PI;
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::Write;
 
 use rand_distr::{Distribution, StandardNormal};
 use rand::prelude::*;
+
+use std::time::Instant;
 
 // use indicatif::{ProgressBar, ProgressStyle};
 
@@ -246,6 +248,31 @@ fn get_random_initial_state(dim: usize) -> Array1<Complex64> {
     psi
 }
 
+// MAGNETIZATION
+fn magnetization(l: usize, psi: &Array1<Complex64>, basis: &[u64]) -> f64 {
+    let mut mz = 0.0;
+    let dim = basis.len() as f64;
+
+    for (i, &state) in basis.iter().enumerate() {
+        let mut site_sum = 0.0;
+
+        for site in 0..l {
+            let val = (state >> site) & 1;
+            if val == 0 {
+                site_sum -= 1.0; // Empty site contributes -1
+            } else {
+                site_sum += 1.0; // Occupied site contributes +1
+            }
+        }
+
+        let prob = psi[i].norm_sqr();
+        mz += site_sum * prob;
+    }
+
+    mz / (l as f64) // Normalize by number of sites
+}
+
+
 fn simulate_trajectory(
     l: usize,
     basis: &[u64],
@@ -255,178 +282,176 @@ fn simulate_trajectory(
     omega: f64,
     dt: f64,
     total_time: f64,
-    initial_pattern: u64,
-) -> (Array1<f64>, Array1<usize>, Vec<Array1<Complex64>>) {    
+    _traj_id: usize,
+) -> (Array1<f64>, Array1<usize>, Vec<Array1<Complex64>>, Array1<f64>) {    
 
-    // 1. Setup Operators
+    // --- 1. Setup Operators ---
     let h = hamiltonian(l, basis, basis_dict, omega);
-    // Diagonal decay matrix (sum L^dag L)
     let decay = jump_hermitian(l, basis, gamma_plus, gamma_minus); 
-    // Individual jump matrices (Vector of size 2*L)
     let jump_ops_list = generate_jump_ops(l, basis, basis_dict, gamma_plus, gamma_minus);
     
-    // Effective Hamiltonian
     let h_eff = Complex64::new(0.0, -1.0) * &h - Complex64::new(0.5, 0.0) * &decay;
 
-    // 2. Initial State
+    // --- 2. Initial State ---
     let dim = basis.len();
-    let mut psi = get_random_initial_state(dim); // (Assuming you have this)
+    let mut psi = get_random_initial_state(dim); 
     let steps = (total_time / dt).ceil() as usize;
 
-    // 3. Initialize Random Trackers (Vectors instead of scalars)
+    // --- 3. Trackers ---
     let mut rng = rand::rng();
     let num_channels = 2 * l;
-
-    // "p_p" and "p_m" become a vector of probabilities, one for each channel
     let mut p_accum: Vec<f64> = vec![1.0; num_channels]; 
-    
-    // "r" and "q" become a vector of random thresholds
     let mut r_thresholds: Vec<f64> = (0..num_channels).map(|_| rng.random()).collect();
 
-    // Storage
+    // --- 4. Storage ---
     let mut times = Vec::new();
-    let mut types = Vec::new(); // Stores index of which operator jumped
+    let mut types = Vec::new(); 
     let mut wfs = Vec::new();
+    let mut sz = Vec::new();
 
-    // 4. Time Loop
-    for t_step in 0..steps {
+    // Special marker for "No Jump" (snapshot). 
+    // We use 2*L because valid jumps are 0..(2L-1).
+    let no_jump_marker = 2 * l; 
+
+    // Settings for the Grid Recording
+    let record_dt = 0.1; 
+    let mut next_record_time = 0.0;
+    let mut current_time = 0.0;
+
+    // --- 5. Time Loop ---
+    for _ in 0..steps {
         
-        // A. Non-Hermitian Evolution Step (Same as your code)
-        let dpsi_nh = {
-            let h_psi = h_eff.dot(&psi);
-            // Note: In your code you added a p_term here. 
-            // Standard SSE usually just does (-i H_eff) * dt.
-            // I will stick to the standard definition based on your h_eff:
-            &h_psi * Complex64::new(dt, 0.0)
-        };
+        // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+        // >>> BLOCK START: COMMENT THIS OUT TO RECORD ONLY JUMPS
+        // >>> This block saves the smooth data between jumps.
+        if current_time >= next_record_time {
+            times.push(current_time);
+            sz.push(magnetization(l, &psi, basis));
+            types.push(no_jump_marker); // Marker for "Continuous Evolution"
+            
+            next_record_time += record_dt;
+        }
+        // >>> BLOCK END
+        // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 
-        // B. Check Jumps for ALL channels
+        // --- B. Physics Evolution (Non-Hermitian) ---
+        let dpsi_nh = &h_eff.dot(&psi) * Complex64::new(dt, 0.0);
         let mut jumped = false;
-
+        
+        // --- C. Check Jumps ---
         for k in 0..num_channels {
-            // 1. Calculate Expectation <psi | L_k^dag L_k | psi>
-            // For efficiency: amp = || L_k psi ||^2
             let l_psi = jump_ops_list[k].dot(&psi);
-            let amp = l_psi.mapv(|x| x.norm_sqr()).sum();
+            let weight = l_psi.mapv(|x| x.norm_sqr()).sum();
+            let prob = weight * dt;
 
-            // 2. Probability for this channel in this time step
-            // Note: Your code had (gamma/s)*amp*dt. 
-            // Since 'build_jump_operator' already puts sqrt(gamma) inside the matrix,
-            // 'amp' here is ALREADY (gamma * <n>). We just need * dt.
-            let prob = amp * dt;
-
-            // 3. Update Accumulator (Your Logic: p *= 1 - prob)
             p_accum[k] *= 1.0 - prob;
 
-            // 4. Check Threshold (Your Logic: r >= p)
             if r_thresholds[k] >= p_accum[k] {
-                // --- JUMP OCCURRED in channel k ---
+                // === JUMP EVENT (Always Recorded) ===
                 
-                // Update wavefunction (L_k * psi / norm)
-                // We already calculated l_psi = L_k * psi above
-                psi = l_psi.mapv(|x| x / amp.sqrt());
-
-                // Add the non-hermitian part (per your algorithm's order)
-                // psi = &psi + &dpsi_nh;
-                
-                // Normalize
+                // 1. Collapse Wavefunction
+                psi = l_psi.mapv(|x| x / weight.sqrt());
                 let norm = psi.mapv(|x| x.norm_sqr()).sum().sqrt();
                 psi.mapv_inplace(|x| x / norm);
 
-                // Reset trackers for THIS channel only
+                // 2. Reset Trackers
                 r_thresholds[k] = rng.random();
                 p_accum[k] = 1.0;
 
-                // Record
-                times.push(t_step as f64 * dt);
-                types.push(k); // k tells us which site and type (even=plus, odd=minus)
-                wfs.push(psi.clone());
+                // 3. SAVE DATA (This is the jump recording)
+                times.push(current_time);
+                sz.push(magnetization(l, &psi, basis));
+                types.push(k); // Original Encoding (0..2L-1)
 
                 jumped = true;
-                // Important: In trajectory logic, usually only one jump is allowed per dt.
-                // We break to avoid applying two jumps simultaneously which is unphysical for dt -> 0
                 break; 
             }
         }
 
         if !jumped {
-            // No jump: Just evolve
             psi = &psi + &dpsi_nh;
             let norm = psi.mapv(|x| x.norm_sqr()).sum().sqrt();
             psi.mapv_inplace(|x| x / norm);
         }
+
+        current_time += dt;
     }
 
-    (Array1::from(times), Array1::from(types), wfs)
+    (Array1::from(times), Array1::from(types), wfs, Array1::from(sz))
 }
 
 
+// MAIN FUNCTION
 
 fn main() {
-    // 1. Set System Parameters
-    let l: usize = 6;              // System size (number of atoms)
-    let omega = 1.0;               // Rabi frequency
-    let gamma_plus = 0.2;          // Creation rate
-    let gamma_minus = 0.2;         // Annihilation rate
-    let dt = 0.005;                // Time step
-    let total_time = 50.0;         // Total simulation duration
+    // --- 1. Set System Parameters ---
+    let l: usize = 8;
+    let omega = 1.0;
+    let gamma_plus = 0.1;
+    let gamma_minus = 2.0;
+    let dt = 0.005;
+    let total_time = 400.0;
+    
+    let num_trajectories = 150; 
+    let output_dir = "../data/trajectories";
 
-    println!("--- PXP Model Trajectory Simulation ---");
+    println!("--- PXP Model: Parallel Trajectories (Separate Files) ---");
     println!("Parameters: L={}, Omega={}, Gamma+={}, Gamma-={}, dt={}", 
              l, omega, gamma_plus, gamma_minus, dt);
 
-    // 2. Build Basis and Dictionary
+    // Create output directory if it doesn't exist
+    if let Err(e) = fs::create_dir_all(output_dir) {
+        eprintln!("Error creating directory: {}", e);
+        return;
+    }
+
+    // --- 2. Build Basis (Shared) ---
     let basis_states = fibonacci_basis(l);
     let basis_dict = create_basis_dict(&basis_states);
     println!("Basis Dimension: {}", basis_states.len());
 
-    // Optional: Print basis states if L is small
-    if l <= 6 {
-        println!("Basis States:");
-        for state in &basis_states {
-            println!("  {:0l$b}", state, l=l);
+    let start_time = Instant::now();
+
+    // --- 3. Run Parallel Simulation & Save ---
+    // We use par_bridge() or into_par_iter() to parallelize.
+    (0..num_trajectories).into_par_iter().for_each(|traj_id| {
+        
+        // A. Run Simulation
+        let (times, jump_types, _wfs, szs) = simulate_trajectory(
+            l,
+            &basis_states,
+            &basis_dict,
+            gamma_plus,
+            gamma_minus,
+            omega,
+            dt,
+            total_time,
+            traj_id 
+        );
+
+        // B. Save to unique file immediately
+        let filename = format!("{}/traj_{}.csv", output_dir, traj_id);
+        
+        // We use a match block to handle file errors safely within the thread
+        match File::create(&filename) {
+            Ok(mut file) => {
+                // Write Header
+                writeln!(file, "time,jump_type,sz").unwrap();
+
+                // Write Data rows
+                for (i, t) in times.iter().enumerate() {
+                    let jump_ind = jump_types[i] % 2; // Simplify jump type index
+                    let sz = szs[i];
+                    writeln!(file, "{:.5},{},{:.6}", t, jump_ind, sz).unwrap();
+                }
+            },
+            Err(e) => eprintln!("Failed to write traj {}: {}", traj_id, e),
         }
-    }
+    });
 
-    // 3. Run Simulation
-    println!("\nRunning trajectory...");
-    let (times, jump_types, _wfs) = simulate_trajectory(
-        l,
-        &basis_states,
-        &basis_dict,
-        gamma_plus,
-        gamma_minus,
-        omega,
-        dt,
-        total_time,
-        0 // (This argument is ignored by your function as it uses random init)
-    );
-
-    // 4. Report Results
-    let num_jumps = times.len();
-    println!("Simulation finished.");
-    println!("Total Jumps: {}", num_jumps);
-    
-    // Calculate average time between jumps
-    if num_jumps > 0 {
-        let avg_wait = total_time / (num_jumps as f64);
-        println!("Average wait time: {:.4}", avg_wait);
-    }
-
-    // 5. Save Jump Data to File
-    let filename = "trajectory_data.csv";
-    match File::create(filename) {
-        Ok(mut file) => {
-            writeln!(file, "time,jump_type_index").unwrap();
-            for (t, k) in times.iter().zip(jump_types.iter()) {
-                // k is the index of the operator (0..2L)
-                // Even k = L+, Odd k = L-
-                writeln!(file, "{:.5},{}", t, k).unwrap();
-            }
-            println!("Jump history saved to '{}'", filename);
-        },
-        Err(e) => println!("Error creating file: {}", e),
-    }
+    let duration = start_time.elapsed();
+    println!("Finished {} trajectories in {:.2?}", num_trajectories, duration);
+    println!("Data saved to directory: '{}'", output_dir);
 }
 
 // fn steady_state(s: f64, lambda: f64, gamma_p: f64, gamma_m: f64) -> (Array2<Complex64>, Array1<Complex64>, Array1<Complex64>, Array1<f64>) {
@@ -490,111 +515,7 @@ fn main() {
 //     pi /= Complex64::new(trace, 0.0);
 
 //     (pi, psi1, psi2, eig_vals)
-// }
-
-// fn simulate_trajectory(
-//     gamma_p: f64,
-//     gamma_m: f64,
-//     lambda: f64,
-//     s: f64,
-//     dt: f64,
-//     total_time: f64,
-// ) -> (Array1<f64>, Array1<usize>, Vec<Array1<Complex64>>) {
-//     let (l_plus, l_minus) = create_jump_operators(lambda, s);
-
-//     let h_eff = l_plus.dot(&l_minus).mapv(|x| x * Complex64::new(0.0, -0.5 * gamma_m / s)) 
-//     + l_minus.dot(&l_plus).mapv(|x| x * Complex64::new(0.0, -0.5 * gamma_p / s));
-    
-//     let (_, psi1, psi2, eigvals) = steady_state(s, lambda, gamma_p, gamma_m);
-//     let mut rng = rand::thread_rng();
-//     let i = if rng.gen::<f64>() < eigvals[0] { 0 } else { 1 };
-//     let mut psi;
-    
-//     let steps: usize = (total_time / dt).ceil() as usize;
-    
-//     if i == 0 {
-//         psi = psi1.clone();
-//         psi /= psi.mapv(|e| e.conj()).dot(&psi).sqrt();
-//     } else {
-//         psi = psi2.clone();
-//         psi /= psi.mapv(|e| e.conj()).dot(&psi).sqrt();
-//     }
-
-//     let mut times = Vec::new();
-//     let mut types = Vec::new();
-//     let mut wfs = Vec::new();
-    
-    
-//     let mut r = rng.gen::<f64>();
-//     let mut q = rng.gen::<f64>();
-
-//     let mut p_p = 1.;
-//     let mut p_m = 1.;
-    
-//     for i in 0..steps{
-        
-        
-//         let amp_m = psi.mapv(|e| e.conj()).dot(&l_plus.dot(&l_minus).dot(&psi));
-//         let amp_p = psi.mapv(|e| e.conj()).dot(&l_minus.dot(&l_plus).dot(&psi));
-        
-//         let prob_p = (gamma_p / s) * amp_p.re * dt;
-//         let prob_m = (gamma_m / s) * amp_m.re * dt;
-        
-//         let p_total = prob_p + prob_m;
-        
-//         let dpsi_nh = {
-//             let h_psi = h_eff.dot(&psi);
-//             let p_term = psi.mapv(|x| x * (0.5 * p_total));
-//             (&h_psi * Complex64::new(0.0, -1.0))* dt + p_term 
-//         };
-        
-//         if r >= p_p {
-//             let dpsi_j_p = l_plus.dot(&psi).mapv(|x| x / (amp_p.re).sqrt());
-//             psi = dpsi_j_p;
-//             psi = &psi + &dpsi_nh;
-//             psi /= psi.mapv(|e| e.conj()).dot(&psi).sqrt();
-            
-//             r = rng.gen::<f64>();
-            
-//             p_p = 1.;
-            
-//             times.push(i as f64 * dt);
-//             types.push(1);
-//             wfs.push(psi.clone());
-//         } else if q >= p_m {
-//             let dpsi_j_m = l_minus.dot(&psi).mapv(|x| x / (amp_m.re).sqrt());
-//             psi = dpsi_j_m;
-//             psi = &psi + &dpsi_nh;
-//             psi /= psi.mapv(|e| e.conj()).dot(&psi).sqrt();
-                        
-//             q = rng.gen::<f64>();
-            
-//             p_m = 1.;
-
-//             times.push(i as f64 * dt);
-//             types.push(0);
-//             wfs.push(psi.clone());
-//         } else {
-//             // No jump, just evolve
-//             psi = &psi + &dpsi_nh;
-//             psi /= psi.mapv(|e| e.conj()).dot(&psi).sqrt();
-//         }
-
-
-//         p_m *= 1.0 - prob_m;
-//         p_p *= 1.0 - prob_p;
-
-
-
-//     }
-
-//     // Convert times to Array1
-//     let times: Array1<f64> = Array1::from(times);
-//     let types: Array1<usize> = Array1::from(types);
-
-//     (times, types, wfs)
-// }
-
+// } 
 
 // // fn lindblad_simulation(s: f64, lambda: f64, gamma_p: f64, gamma_m: f64, total_time: f64, dt: f64) -> Vec<f64> {
 // //     let max_steps = (total_time / dt).ceil() as usize;
