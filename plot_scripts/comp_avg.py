@@ -6,10 +6,10 @@ import os
 
 # --- 1. Settings ---
 data_dir = "../data/trajectories/"
-output_image = "pxp_trajectory_corrected.png"
-expected_value = -0.6425108401711591 
+output_image = "../data/pxp_trajectory_corrected.png"
+expected_value = -0.48196168880500373
 common_dt = 0.05  # The resolution for the shared time grid
-max_time = 400.0  # Should match your Rust simulation total_time
+max_time = 50.0  # Should match your Rust simulation total_time
 
 # --- 2. Define Common Time Grid ---
 # We create one master clock that all files will conform to

@@ -386,13 +386,13 @@ fn simulate_trajectory(
 fn main() {
     // --- 1. Set System Parameters ---
     let l: usize = 8;
-    let omega = 1.0;
-    let gamma_plus = 0.1;
-    let gamma_minus = 2.0;
-    let dt = 0.005;
-    let total_time = 400.0;
+    let omega = 10.0;
+    let gamma_plus = 0.002;
+    let gamma_minus = 0.02;
+    let dt = 1e-5;
+    let total_time = 50.0;
     
-    let num_trajectories = 150; 
+    let num_trajectories = 50; 
     let output_dir = "../data/trajectories";
 
     println!("--- PXP Model: Parallel Trajectories (Separate Files) ---");

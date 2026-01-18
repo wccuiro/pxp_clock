@@ -312,9 +312,9 @@ def heat_current(rho, sup_p_D, sup_m_D,H):
 L = 8
 basis = generation_basis(L)
 
-omega = 1.0
-gamma_plus = 0.1
-gamma_minus = 2.0
+omega = 10.0
+gamma_plus = 0.002
+gamma_minus = 0.02
 
 H = Hamiltonian(L, basis[0], basis[1], omega)
 D = dissipation(L, basis[0], basis[1], gamma_plus, gamma_minus)
