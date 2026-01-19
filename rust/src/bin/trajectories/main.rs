@@ -251,7 +251,7 @@ fn get_random_initial_state(dim: usize) -> Array1<Complex64> {
 // MAGNETIZATION
 fn magnetization(l: usize, psi: &Array1<Complex64>, basis: &[u64]) -> f64 {
     let mut mz = 0.0;
-    let dim = basis.len() as f64;
+    // let dim = basis.len() as f64;
 
     for (i, &state) in basis.iter().enumerate() {
         let mut site_sum = 0.0;
@@ -277,20 +277,15 @@ fn simulate_trajectory(
     l: usize,
     basis: &[u64],
     basis_dict: &HashMap<u64, usize>,
+    h_eff: &Array2<Complex64>,
+    // jump_ops_list: &Vec<Array2<Complex64>>,
     gamma_plus: f64,
     gamma_minus: f64,
-    omega: f64,
     dt: f64,
     total_time: f64,
     _traj_id: usize,
 ) -> (Array1<f64>, Array1<usize>, Vec<Array1<Complex64>>, Array1<f64>) {    
 
-    // --- 1. Setup Operators ---
-    let h = hamiltonian(l, basis, basis_dict, omega);
-    let decay = jump_hermitian(l, basis, gamma_plus, gamma_minus); 
-    let jump_ops_list = generate_jump_ops(l, basis, basis_dict, gamma_plus, gamma_minus);
-    
-    let h_eff = Complex64::new(0.0, -1.0) * &h - Complex64::new(0.5, 0.0) * &decay;
 
     // --- 2. Initial State ---
     let dim = basis.len();
@@ -340,7 +335,13 @@ fn simulate_trajectory(
         
         // --- C. Check Jumps ---
         for k in 0..num_channels {
-            let l_psi = jump_ops_list[k].dot(&psi);
+            let jump_op;
+            if k%2 == 0 {
+                jump_op = build_jump_operator(l, basis, basis_dict, (k/2) as usize , (k%2) as u8, gamma_plus);
+            } else {
+                jump_op = build_jump_operator(l, basis, basis_dict, (k/2) as usize, (k%2) as u8, gamma_minus);
+            }
+            let l_psi = jump_op.dot(&psi);
             let weight = l_psi.mapv(|x| x.norm_sqr()).sum();
             let prob = weight * dt;
 
@@ -385,14 +386,14 @@ fn simulate_trajectory(
 
 fn main() {
     // --- 1. Set System Parameters ---
-    let l: usize = 8;
-    let omega = 10.0;
+    let l: usize = 20;
+    let omega = 1.0;
     let gamma_plus = 0.002;
     let gamma_minus = 0.02;
-    let dt = 1e-5;
+    let dt = 1e-1;
     let total_time = 50.0;
     
-    let num_trajectories = 50; 
+    let num_trajectories = 1; 
     let output_dir = "../data/trajectories";
 
     println!("--- PXP Model: Parallel Trajectories (Separate Files) ---");
@@ -410,6 +411,13 @@ fn main() {
     let basis_dict = create_basis_dict(&basis_states);
     println!("Basis Dimension: {}", basis_states.len());
 
+    let h = hamiltonian(l, &basis_states, &basis_dict, omega);
+    let decay = jump_hermitian(l, &basis_states, gamma_plus, gamma_minus); 
+    // let jump_ops_list = generate_jump_ops(l, &basis_states, &basis_dict, gamma_plus, gamma_minus);
+    
+    let h_eff = Complex64::new(0.0, -1.0) * &h - Complex64::new(0.5, 0.0) * &decay;
+
+
     let start_time = Instant::now();
 
     // --- 3. Run Parallel Simulation & Save ---
@@ -421,9 +429,10 @@ fn main() {
             l,
             &basis_states,
             &basis_dict,
+            &h_eff,
             gamma_plus,
             gamma_minus,
-            omega,
+            // &jump_ops_list, 
             dt,
             total_time,
             traj_id 
