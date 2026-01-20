@@ -1,4 +1,4 @@
-use ndarray::Array2;
+use ndarray::{Array1,Array2};
 use ndarray_linalg::Eig;
 use num_complex::Complex64;
 use rayon::prelude::*;
@@ -657,20 +657,135 @@ fn build_lindbladian(
     l_cal
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let l = 10;
-    let q_sector = 0;
-    let omega = 2.0;
-    let gamma_plus = 1.0;
-    let gamma_minus = 0.5;
+fn occupation_number(
+    l: usize,
+    basis_states: &[BasisState],
+    q_sector: i64,
+) -> Array2<Complex64> {
+    let dim = basis_states.len();
+    let mut n_cal = Array2::<Complex64>::zeros((dim, dim));
     
-    println!("=== Lindbladian Solver ===");
-    println!("L = {}, Q_sector = {}", l, q_sector);
-    println!("Omega = {}, γ+ = {}, γ- = {}", omega, gamma_plus, gamma_minus);
-    println!("\nGenerating basis...");
+    let rows: Vec<_> = (0..dim)
+        .into_par_iter()
+        .map(|j| {
+            let mut row = vec![Complex64::new(0.0, 0.0); dim];
+            
+            for i in 0..dim {
+                let state_in = &basis_states[i];
+                let state_out = &basis_states[j];
+                
+                // 1. Compute the overlap of the B-part (Bra)
+                // This is identical to 'inner_b' in your original code
+                let inner_b = inner_product(
+                    &state_out.states_b,
+                    &state_in.states_b,
+                    state_out.k - q_sector,
+                    state_in.k - q_sector,
+                    l,
+                    state_out.norm_b,
+                    state_in.norm_b,
+                );
+                
+                // Optimization: If B-states are orthogonal, the whole term is 0.
+                if inner_b.norm() <= THRESHOLD {
+                    continue;
+                }
+
+                // 2. Compute the A-part (Ket): Sum over all sites
+                for site in 0..l {
+                    let mut a_prod = Complex64::new(0.0, 0.0);
+                    
+                    // Loop over translations (same logic as your Hamiltonian)
+                    for ii in 0..l {
+                        for jj in 0..l {
+                            // Condition 1: States must match (Diagonal in real space)
+                            // We do NOT flip bits (unlike Hamiltonian/Dissipation)
+                            let c1 = state_in.states_a[ii] == state_out.states_a[jj];
+                            
+                            // Condition 2: Is the particle there? 
+                            // (We removed the P constraints c2/c3, kept only occupancy check)
+                            let c_occ = (state_in.states_a[ii] & (1u64 << (site % l))) != 0;
+                            
+                            if c1 && c_occ {
+                                let phase = 2.0 * PI * ((state_out.k * jj as i64 - state_in.k * ii as i64) as f64) / (l as f64);
+                                a_prod += Complex64::new(0.0, phase).exp();
+                            }
+                        }
+                    }
+                    a_prod /= state_in.norm_a * state_out.norm_a;
+                    
+                    // Add contribution for this site
+                    row[i] += a_prod * inner_b;
+                }
+            }
+            row
+        })
+        .collect();
+    
+    for (j, row) in rows.into_iter().enumerate() {
+        for (i, val) in row.into_iter().enumerate() {
+            n_cal[[j, i]] = val;
+        }
+    }
+    
+    n_cal/l as f64
+}
+
+fn compute_trace(
+    l: usize,
+    basis_states: &[BasisState],
+    vectorized_op: &Array1<Complex64>, // This is your aux_vec
+    q_sector: i64,
+) -> Complex64 {
+    // If Q != 0, trace is 0
+    if q_sector != 0 {
+        return Complex64::new(0.0, 0.0);
+    }
+
+    // Sum_j (coeff_j * <B_j | A_j>)
+    vectorized_op.as_slice().unwrap()
+        .par_iter()
+        .enumerate()
+        .map(|(i, &coeff)| {
+            if coeff.norm() <= THRESHOLD {
+                return Complex64::new(0.0, 0.0);
+            }
+
+            let state = &basis_states[i];
+            
+            // Calculate overlap <B|A>
+            let overlap = inner_product(
+                &state.states_a,
+                &state.states_b,
+                state.k,
+                state.k, 
+                l,
+                state.norm_a,
+                state.norm_b,
+            );
+
+            coeff * overlap
+        })
+        .sum()
+}
+
+// Usage in main:
+// let expectation_value = compute_trace_of_vectorized(l, &basis_states, &aux_vec, q_sector);
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let l = 8;
+    let q_sector = 0;
+    let omega = 1.0;
+    // let gamma_plus = 1.0;
+    // let gamma_minus = 1.0;
+    
+    // println!("=== Lindbladian Solver ===");
+    // println!("L = {}, Q_sector = {}", l, q_sector);
+    // println!("Omega = {}, γ+ = {}, γ- = {}", omega, gamma_plus, gamma_minus);
+    // println!("\nGenerating basis...");
     
     let basis = translationally_invariant_basis(l);
-    println!("Representative states: {}", basis.rep_states.len());
+    // println!("Representative states: {}", basis.rep_states.len());
     
     let mut basis_per_sector: HashMap<i64, Vec<u64>> = HashMap::new();
     for k_sector in 0..l as i64 {
@@ -706,8 +821,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     
-    let dimension = basis_states.len();
-    println!("Total dimension: {}\n", dimension);
+    // let dimension = basis_states.len();
+    // println!("Total dimension: {}\n", dimension);
     
     // println!("Building Hamiltonian matrix...");
     // let h_cal = build_hamiltonian_parallel(l, &basis_states, q_sector, omega);
@@ -717,36 +832,86 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // let d_cal = build_dissipation_parallel(l, &basis_states, q_sector, gamma_plus, gamma_minus);
     // println!("✓ Dissipation complete!");
     
-    println!("\nBuilding Lindbladian...");
-    let l_cal = build_lindbladian(l, &basis_states, q_sector, omega, gamma_plus, gamma_minus);
-    // let l_cal = h_cal + d_cal;
-    println!("✓ Lindbladian complete!");
+    // println!("\nBuilding Lindbladian...");
+    let g_values = Array1::linspace(0.001, 10.0, 30);
+    let omega_values = Array1::linspace(0.001, 10.0, 30);
 
-    
-    // println!("\nComputing eigenvalues...");
-    // match l_cal.eig() {
-    //     Ok((eigenvalues, _eigenvectors)) => {
-    //         println!("✓ Eigenvalues computed ({} values)\n", eigenvalues.len());
+    let mut file_occupation = File::create("occupation.csv")?;
+    writeln!(file_occupation, "n,g,omega")?;
+
+    for &g in &g_values {
+        for &omega in &omega_values {
+            let gamma_minus = 1.0;
+            let gamma_plus = g * gamma_minus;
+            let l_cal = build_lindbladian(l, &basis_states, q_sector, omega, gamma_plus, gamma_minus);
+            // let l_cal = h_cal + d_cal;
+            // println!("✓ Lindbladian complete!");
+
             
-    //         // Write to CSV
-    //         let mut file = File::create("eigenvalues.csv")?;
-    //         writeln!(file, "real,imaginary")?;
-    //         for eval in eigenvalues.iter() {
-    //             writeln!(file, "{},{}", eval.re, eval.im)?;
-    //         }
-    //         println!("✓ Eigenvalues saved to eigenvalues.csv");
-            
-    //         // Print first 10 eigenvalues
-    //         println!("\nFirst 10 eigenvalues:");
-    //         for (i, eval) in eigenvalues.iter().take(10).enumerate() {
-    //             println!("  λ_{:<2} = {:>12.6} + {:>12.6}i", i, eval.re, eval.im);
-    //         }
-    //     }
-    //     Err(e) => {
-    //         eprintln!("Error: Eigenvalue computation failed: {:?}", e);
-    //     }
-    // }
-    
-    println!("\n=== Done! ===");
+            // println!("\nComputing eigenvalues...");
+            // We capture 'eigenvectors' (removed the underscore _ so compiler knows we use it)
+            match l_cal.eig() {
+                Ok((eigenvalues, eigenvectors)) => {
+                    // println!("✓ Eigenvalues computed ({} values)\n", eigenvalues.len());
+                    
+                    // 1. Pre-calculate the Occupation Matrix ONCE (outside the loop)
+                    //    This saves massive time so we don't rebuild it if we find multiple steady states.
+                    // println!("Building observable matrices...");
+                    let n_matrix = occupation_number(l, &basis_states, q_sector);
+
+                    let mut file = File::create("eigenvalues.csv")?;
+                    writeln!(file, "real,imaginary")?;
+
+                    
+                    // 2. Iterate with enumerate to get the index 'i' directly
+                    for (i, eval) in eigenvalues.iter().enumerate() {
+                        
+                        // Check for Steady State (Real part approx 0, Imag part approx 0)
+                        if eval.re.abs() < 1e-8 && eval.im.abs() < 1e-8 {
+                            // println!("\n--- Steady State Found (Index {}) ---", i);
+                            // println!("Eigenvalue: {:.10} + {:.10}i", eval.re, eval.im);
+
+                            // A. Extract the raw eigenvector (vectorized density matrix)
+                            //    We expect this to be a column vector
+                            let rho_vec = eigenvectors.column(i).to_owned();
+
+                            // B. Compute Normalization Factor Z = Tr[rho]
+                            //    using the 'compute_trace' function we defined earlier
+                            let tr_rho = compute_trace(l, &basis_states, &rho_vec, q_sector);
+                            // println!("Trace (Normalization factor): {:.6} + {:.6}i", tr_rho.re, tr_rho.im);
+
+                            // C. Compute <n> = Tr[n * rho]
+                            //    First multiply matrix @ vector
+                            let n_rho_vec = n_matrix.dot(&rho_vec);
+                            //    Then take the trace of that resulting vector
+                            let tr_n_rho = compute_trace(l, &basis_states, &n_rho_vec, q_sector);
+                            
+                            // D. Physical Expectation Value: <n> = Tr[n rho] / Tr[rho]
+                            if tr_rho.norm() > 1e-10 {
+                                let expectation_n = tr_n_rho / tr_rho;
+                                // println!("{},{},{}", expectation_n.re, g, omega);
+                                writeln!(file_occupation, "{},{},{}", expectation_n.re, g, omega)?;
+                            } else {
+                                // println!("Warning: Trace is zero, cannot normalize!");
+                            }
+                            // println!("-------------------------------------\n");
+                        }
+
+                        writeln!(file, "{},{}", eval.re, eval.im)?;
+                    }
+                    // println!("✓ Eigenvalues saved to eigenvalues.csv");
+                    
+                    // println!("\nFirst 10 eigenvalues:");
+                    // for (i, eval) in eigenvalues.iter().take(10).enumerate() {
+                    //     println!("  λ_{:<2} = {:>12.6} + {:>12.6}i", i, eval.re, eval.im);
+                    // }
+                }
+                Err(e) => {
+                    eprintln!("Error: Eigenvalue computation failed: {:?}", e);
+                }
+            }
+        }    
+    }
+    // println!("\n=== Done! ===");
     Ok(())
 }
