@@ -4,5 +4,6 @@
 /data
 *.dat
 *.csv
+*.lock
 
 /rust/target

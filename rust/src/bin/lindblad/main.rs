@@ -731,6 +731,89 @@ fn occupation_number(
     n_cal/l as f64
 }
 
+fn density_correlation_nnn(
+    l: usize,
+    basis_states: &[BasisState],
+    q_sector: i64,
+) -> Array2<Complex64> {
+    let dim = basis_states.len();
+    let mut corr_cal = Array2::<Complex64>::zeros((dim, dim));
+    
+    let rows: Vec<_> = (0..dim)
+        .into_par_iter()
+        .map(|j| {
+            let mut row = vec![Complex64::new(0.0, 0.0); dim];
+            
+            for i in 0..dim {
+                let state_in = &basis_states[i];
+                let state_out = &basis_states[j];
+                
+                // 1. Compute the overlap of the B-part (Bra)
+                let inner_b = inner_product(
+                    &state_out.states_b,
+                    &state_in.states_b,
+                    state_out.k - q_sector,
+                    state_in.k - q_sector,
+                    l,
+                    state_out.norm_b,
+                    state_in.norm_b,
+                );
+                
+                if inner_b.norm() <= THRESHOLD {
+                    continue;
+                }
+
+                // 2. Compute the A-part (Ket): Sum over all sites
+                // This corresponds to the sum over j in <n_{j-1} n_{j+1}>
+                for site in 0..l {
+                    let mut a_prod = Complex64::new(0.0, 0.0);
+                    
+                    // Identify neighbors with Periodic Boundary Conditions
+                    // (site - 1) wrapping around
+                    let idx_minus = if site == 0 { l - 1 } else { site - 1 };
+                    // (site + 1) wrapping around
+                    let idx_plus = if site == l - 1 { 0 } else { site + 1 };
+
+                    // Loop over translations
+                    for ii in 0..l {
+                        for jj in 0..l {
+                            // Condition 1: States must match (Diagonal in real space)
+                            let c1 = state_in.states_a[ii] == state_out.states_a[jj];
+                            
+                            // Condition 2: Check correlations
+                            // We need occupancy at BOTH (site-1) AND (site+1)
+                            // We create a mask for these two positions
+                            let mask = (1u64 << idx_minus) | (1u64 << idx_plus);
+                            
+                            // Check if the current configuration has bits set at both positions
+                            let c_corr = (state_in.states_a[ii] & mask) == mask;
+                            
+                            if c1 && c_corr {
+                                let phase = 2.0 * PI * ((state_out.k * jj as i64 - state_in.k * ii as i64) as f64) / (l as f64);
+                                a_prod += Complex64::new(0.0, phase).exp();
+                            }
+                        }
+                    }
+                    a_prod /= state_in.norm_a * state_out.norm_a;
+                    
+                    // Add contribution for this specific site pair
+                    row[i] += a_prod * inner_b;
+                }
+            }
+            row
+        })
+        .collect();
+    
+    for (j, row) in rows.into_iter().enumerate() {
+        for (i, val) in row.into_iter().enumerate() {
+            corr_cal[[j, i]] = val;
+        }
+    }
+    
+    // Normalize by L to get the average correlation per site
+    corr_cal / l as f64
+}
+
 fn compute_trace(
     l: usize,
     basis_states: &[BasisState],
@@ -775,7 +858,7 @@ fn compute_trace(
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let l = 8;
     let q_sector = 0;
-    let omega = 1.0;
+    // let omega = 1.0;
     // let gamma_plus = 1.0;
     // let gamma_minus = 1.0;
     
@@ -833,11 +916,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // println!("✓ Dissipation complete!");
     
     // println!("\nBuilding Lindbladian...");
-    let g_values = Array1::linspace(0.001, 10.0, 30);
-    let omega_values = Array1::linspace(0.001, 10.0, 30);
+    let g_values = Array1::linspace(0.001, 10.0, 20);
+    let omega_values = Array1::linspace(0.0, 10.0, 20);
 
     let mut file_occupation = File::create("occupation.csv")?;
-    writeln!(file_occupation, "n,g,omega")?;
+    writeln!(file_occupation, "n,nn,g,omega")?;
+
+    let n_matrix = occupation_number(l, &basis_states, q_sector);
+    let corr_matrix = density_correlation_nnn(l, &basis_states, q_sector);
 
     for &g in &g_values {
         for &omega in &omega_values {
@@ -857,7 +943,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     // 1. Pre-calculate the Occupation Matrix ONCE (outside the loop)
                     //    This saves massive time so we don't rebuild it if we find multiple steady states.
                     // println!("Building observable matrices...");
-                    let n_matrix = occupation_number(l, &basis_states, q_sector);
+
 
                     let mut file = File::create("eigenvalues.csv")?;
                     writeln!(file, "real,imaginary")?;
@@ -883,14 +969,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             // C. Compute <n> = Tr[n * rho]
                             //    First multiply matrix @ vector
                             let n_rho_vec = n_matrix.dot(&rho_vec);
+                            let nn_rho_vec = corr_matrix.dot(&rho_vec);
                             //    Then take the trace of that resulting vector
                             let tr_n_rho = compute_trace(l, &basis_states, &n_rho_vec, q_sector);
+                            let tr_nn_rho = compute_trace(l, &basis_states, &nn_rho_vec, q_sector);
                             
                             // D. Physical Expectation Value: <n> = Tr[n rho] / Tr[rho]
                             if tr_rho.norm() > 1e-10 {
                                 let expectation_n = tr_n_rho / tr_rho;
+                                let expectation_nn = tr_nn_rho / tr_rho;
                                 // println!("{},{},{}", expectation_n.re, g, omega);
-                                writeln!(file_occupation, "{},{},{}", expectation_n.re, g, omega)?;
+                                writeln!(file_occupation, "{},{},{},{}", expectation_n.re, expectation_nn.re, g, omega)?;
                             } else {
                                 // println!("Warning: Trace is zero, cannot normalize!");
                             }

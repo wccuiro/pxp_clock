@@ -1,13 +1,13 @@
 use ndarray::{Array1,Array2};
-use ndarray_linalg::Eig;
+// use ndarray_linalg::Eig;
 use num_complex::Complex64;
 use rayon::prelude::*;
-use std::collections::{HashMap, HashSet};
-use std::f64::consts::PI;
+use std::collections::HashMap;
+// use std::f64::consts::PI;
 use std::fs::{self, File};
 use std::io::Write;
 
-use rand_distr::{Distribution, StandardNormal};
+use rand_distr::StandardNormal;
 use rand::prelude::*;
 
 use std::time::Instant;
@@ -272,6 +272,27 @@ fn magnetization(l: usize, psi: &Array1<Complex64>, basis: &[u64]) -> f64 {
     mz / (l as f64) // Normalize by number of sites
 }
 
+// OCCUPATION
+fn occupation(l: usize, psi: &Array1<Complex64>, basis: &[u64]) -> f64 {
+    let mut occupation = 0.0;
+    // let dim = basis.len() as f64;
+
+    for (i, &state) in basis.iter().enumerate() {
+        let mut site_sum = 0.0;
+
+        for site in 0..l {
+            let val = (state >> site) & 1;
+            if val == 1 {
+                site_sum += 1.0; // Occupied site contributes +1
+            }
+        }
+
+        let prob = psi[i].norm_sqr();
+        occupation += site_sum * prob;
+    }
+
+    occupation / (l as f64) // Normalize by number of sites
+}
 
 fn simulate_trajectory(
     l: usize,
@@ -284,7 +305,7 @@ fn simulate_trajectory(
     dt: f64,
     total_time: f64,
     _traj_id: usize,
-) -> (Array1<f64>, Array1<usize>, Vec<Array1<Complex64>>, Array1<f64>) {    
+) -> (Array1<f64>, Array1<usize>, Vec<Array1<Complex64>>, Array1<f64>, Array1<f64>) {    
 
 
     // --- 2. Initial State ---
@@ -303,6 +324,7 @@ fn simulate_trajectory(
     let mut types = Vec::new(); 
     let mut wfs = Vec::new();
     let mut sz = Vec::new();
+    let mut occ = Vec::new();
 
     // Special marker for "No Jump" (snapshot). 
     // We use 2*L because valid jumps are 0..(2L-1).
@@ -322,6 +344,7 @@ fn simulate_trajectory(
         if current_time >= next_record_time {
             times.push(current_time);
             sz.push(magnetization(l, &psi, basis));
+            occ.push(occupation(l, &psi, basis));
             types.push(no_jump_marker); // Marker for "Continuous Evolution"
             
             next_record_time += record_dt;
@@ -363,6 +386,7 @@ fn simulate_trajectory(
                 times.push(current_time);
                 sz.push(magnetization(l, &psi, basis));
                 types.push(k); // Original Encoding (0..2L-1)
+                occ.push(occupation(l, &psi, basis));
 
                 jumped = true;
                 break; 
@@ -378,7 +402,7 @@ fn simulate_trajectory(
         current_time += dt;
     }
 
-    (Array1::from(times), Array1::from(types), wfs, Array1::from(sz))
+    (Array1::from(times), Array1::from(types), wfs, Array1::from(sz), Array1::from(occ))
 }
 
 
@@ -386,11 +410,11 @@ fn simulate_trajectory(
 
 fn main() {
     // --- 1. Set System Parameters ---
-    let l: usize = 20;
+    let l: usize = 14;
     let omega = 1.0;
     let gamma_plus = 0.002;
     let gamma_minus = 0.02;
-    let dt = 1e-1;
+    let dt = 1e-3;
     let total_time = 50.0;
     
     let num_trajectories = 1; 
@@ -425,7 +449,7 @@ fn main() {
     (0..num_trajectories).into_par_iter().for_each(|traj_id| {
         
         // A. Run Simulation
-        let (times, jump_types, _wfs, szs) = simulate_trajectory(
+        let (times, jump_types, _wfs, szs, occs) = simulate_trajectory(
             l,
             &basis_states,
             &basis_dict,
@@ -445,13 +469,14 @@ fn main() {
         match File::create(&filename) {
             Ok(mut file) => {
                 // Write Header
-                writeln!(file, "time,jump_type,sz").unwrap();
+                writeln!(file, "time,jump_type,sz,n").unwrap();
 
                 // Write Data rows
                 for (i, t) in times.iter().enumerate() {
                     let jump_ind = jump_types[i] % 2; // Simplify jump type index
                     let sz = szs[i];
-                    writeln!(file, "{:.5},{},{:.6}", t, jump_ind, sz).unwrap();
+                    let occ = occs[i];
+                    writeln!(file, "{:.5},{},{:.6},{:.6}", t, jump_ind, sz, occ).unwrap();
                 }
             },
             Err(e) => eprintln!("Failed to write traj {}: {}", traj_id, e),
