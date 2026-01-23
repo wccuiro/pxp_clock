@@ -6,6 +6,8 @@ use std::collections::{HashMap, HashSet};
 use std::f64::consts::PI;
 use std::fs::File;
 use std::io::Write;
+use sprs::{CsMat, TriMat};
+
 
 const THRESHOLD: f64 = 1e-10;
 
@@ -403,6 +405,7 @@ fn build_dissipation_parallel(
     d_cal
 }
 
+
 fn build_lindbladian(
     l: usize,
     basis_states: &[BasisState],
@@ -410,22 +413,28 @@ fn build_lindbladian(
     omega: f64,
     gamma_plus: f64,
     gamma_minus: f64,
-) -> Array2<Complex64> {
+) -> CsMat<Complex64> {
     let dim = basis_states.len();
     
     // 1. Allocate the single final matrix
-    let mut l_cal = Array2::<Complex64>::zeros((dim, dim));
+    // let mut l_cal = Array2::<Complex64>::zeros((dim, dim));
     
-    // 2. Parallelize directly over the mutable memory slice of the matrix
-    //    Each chunk corresponds to one row 'j'
-    l_cal.as_slice_mut()
-        .unwrap()
-        .par_chunks_mut(dim)
-        .enumerate()
-        .for_each(|(j, row_slice)| {
+    // // 2. Parallelize directly over the mutable memory slice of the matrix
+    // //    Each chunk corresponds to one row 'j'
+    // l_cal.as_slice_mut()
+    //     .unwrap()
+    //     .par_chunks_mut(dim)
+    //     .enumerate()
+    //     .for_each(|(j, row_slice)| {
+    let triplets: Vec<(usize, usize, Complex64)> = (0..dim)
+        .into_par_iter()
+        .flat_map(|j| {
+            let mut local_triplets = Vec::new();
+
             let state_out = &basis_states[j];
             
             for i in 0..dim {
+                
                 let state_in = &basis_states[i];
                 let mut elem = Complex64::new(0.0, 0.0);
                 
@@ -650,11 +659,24 @@ fn build_lindbladian(
                     elem += gamma_minus * (a_minus * b_minus - 0.5 * aa_minus * inner_b - 0.5 * inner_a * bb_minus);
                 }
                 
-                row_slice[i] = elem;
+                if elem.norm() > THRESHOLD {
+                    local_triplets.push((j, i, elem));
+                }
             }
-        });
+            local_triplets
+        })
+        .collect();
+                // row_slice[i] = elem;
+    let mut tri_mat = TriMat::new((dim, dim));
+    for (row, col, val) in triplets {
+        tri_mat.add_triplet(row, col, val);
+    }
     
-    l_cal
+    tri_mat.to_csr()
+    //         }
+    //     });
+    
+    // l_cal
 }
 
 fn occupation_number(
@@ -856,7 +878,7 @@ fn compute_trace(
 // let expectation_value = compute_trace_of_vectorized(l, &basis_states, &aux_vec, q_sector);
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let l = 8;
+    let l = 10;
     let q_sector = 0;
     // let omega = 1.0;
     // let gamma_plus = 1.0;
@@ -916,8 +938,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // println!("✓ Dissipation complete!");
     
     // println!("\nBuilding Lindbladian...");
-    let g_values = Array1::linspace(0.001, 10.0, 20);
-    let omega_values = Array1::linspace(0.0, 10.0, 20);
+    let g_values = Array1::linspace(0.001, 10.0, 2);
+    let omega_values = Array1::linspace(0.0, 10.0, 2);
 
     let mut file_occupation = File::create("occupation.csv")?;
     writeln!(file_occupation, "n,nn,g,omega")?;
@@ -933,10 +955,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // let l_cal = h_cal + d_cal;
             // println!("✓ Lindbladian complete!");
 
+            let l_cal_dense = {
+                let mut dense = Array2::<Complex64>::zeros((basis_states.len(), basis_states.len()));
+                for (val, (row, col)) in l_cal.iter() {
+                    dense[[row, col]] = *val;
+                }
+                dense
+            };
             
             // println!("\nComputing eigenvalues...");
             // We capture 'eigenvectors' (removed the underscore _ so compiler knows we use it)
-            match l_cal.eig() {
+            match l_cal_dense.eig() {
                 Ok((eigenvalues, eigenvectors)) => {
                     // println!("✓ Eigenvalues computed ({} values)\n", eigenvalues.len());
                     
