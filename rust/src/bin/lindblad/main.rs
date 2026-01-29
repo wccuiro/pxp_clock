@@ -112,7 +112,7 @@ struct BasisState {
     norm_b: f64,
 }
 
-fn build_hamiltonian_parallel(
+fn _build_hamiltonian_parallel(
     l: usize,
     basis_states: &[BasisState],
     q_sector: i64,
@@ -208,7 +208,7 @@ fn build_hamiltonian_parallel(
     h_cal
 }
 
-fn build_dissipation_parallel(
+fn _build_dissipation_parallel(
     l: usize,
     basis_states: &[BasisState],
     q_sector: i64,
@@ -878,7 +878,7 @@ fn compute_trace(
 // let expectation_value = compute_trace_of_vectorized(l, &basis_states, &aux_vec, q_sector);
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let l = 10;
+    let l = 8;
     let q_sector = 0;
     // let omega = 1.0;
     // let gamma_plus = 1.0;
@@ -938,8 +938,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // println!("✓ Dissipation complete!");
     
     // println!("\nBuilding Lindbladian...");
-    let g_values = Array1::linspace(0.001, 10.0, 2);
-    let omega_values = Array1::linspace(0.0, 10.0, 2);
+    let g_values = Array1::linspace(0.001, 10.0, 50);
+    let omega_values = Array1::linspace(0.0, 10.0, 50);
 
     let mut file_occupation = File::create("occupation.csv")?;
     writeln!(file_occupation, "n,nn,g,omega")?;
