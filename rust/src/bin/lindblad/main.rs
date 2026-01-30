@@ -1,5 +1,5 @@
 use ndarray::{Array1,Array2};
-use ndarray_linalg::Eig;
+use ndarray_linalg::{Eig, EigVals};
 use num_complex::Complex64;
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
@@ -874,6 +874,83 @@ fn compute_trace(
         .sum()
 }
 
+fn steady_state_spectrum(
+    basis_states: &[BasisState],
+    vectorized_op: &Array1<Complex64>,
+) -> Array1<f64> {
+    let mut all_eigenvalues: Vec<Complex64> = Vec::new();
+    let mut current_idx = 0;
+
+    // We group by the 'k' (momentum) sector
+    // Your basis is ordered: (n,k=0, m,k=0), (n,k=1, m,k=1)...
+    let mut i = 0;
+    while i < basis_states.len() {
+        let current_k = basis_states[i].k;
+        
+        // 1. Find the size of the current k-block
+        // Count how many states share this k
+        let mut block_size = 0;
+        while i + block_size < basis_states.len() && basis_states[i + block_size].k == current_k {
+            block_size += 1;
+        }
+
+        // The number of elements in a vectorized block is block_size * block_size
+        // However, based on your description, the basis list already represents 
+        // the |n>|m> pairs. So we take the square root to get the matrix dimension.
+        let dim = (block_size as f64).sqrt() as usize;
+        
+        // 2. Build the matrix block
+        let mut block_matrix = Array2::<Complex64>::zeros((dim, dim));
+        for row in 0..dim {
+            for col in 0..dim {
+                let vec_idx = current_idx + (row * dim + col);
+                block_matrix[[row, col]] = vectorized_op[vec_idx];
+            }
+        }
+
+        // 3. Diagonalize this block
+        if let Ok(vals) = block_matrix.eigvals() {
+            all_eigenvalues.extend(vals.iter());
+        }
+
+        // Advance to the next block
+        current_idx += block_size;
+        i += block_size;
+    }
+
+    let eig_array = Array1::from_vec(all_eigenvalues);
+
+    // 5. Normalize the spectrum
+    // The sum of eigenvalues is the trace of the density matrix
+
+    // sum imaginary part of eigenvalues, should be 0
+    let imag_sum: f64 = eig_array
+        .iter()
+        .map(|c| c.im)
+        .sum();
+    if imag_sum.abs() > 1e-10 {
+        eprintln!("Warning: Imaginary part of eigenvalues sum is not zero: {}", imag_sum);
+    }
+
+    let mut eig_array_real: Array1<f64> = eig_array.mapv(|c| c.re);
+
+    let trace: f64 = eig_array_real.sum();
+
+    if trace > 1e-15 {
+        eig_array_real /= trace;
+    } else {
+        eprintln!("Warning: Trace is zero, cannot normalize spectrum.");
+    }
+
+    // Sort descending (largest to smallest)
+    eig_array_real
+        .as_slice_mut()
+        .unwrap()
+        .sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+    
+    eig_array_real
+}
+
 // Usage in main:
 // let expectation_value = compute_trace_of_vectorized(l, &basis_states, &aux_vec, q_sector);
 
@@ -938,11 +1015,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // println!("✓ Dissipation complete!");
     
     // println!("\nBuilding Lindbladian...");
-    let g_values = Array1::linspace(0.001, 10.0, 50);
-    let omega_values = Array1::linspace(0.0, 10.0, 50);
+    let g_values = Array1::linspace(2.0, 10.0, 1);
+    let omega_values = Array1::linspace(0.0, 30.0, 200);
 
     let mut file_occupation = File::create("occupation.csv")?;
     writeln!(file_occupation, "n,nn,g,omega")?;
+
+    let mut file_std_eigenvalues = File::create("std_eigenvalues.csv")?;
+    // writeln!(file_std_eigenvalues, "g,omega,")?;
 
     let n_matrix = occupation_number(l, &basis_states, q_sector);
     let corr_matrix = density_correlation_nnn(l, &basis_states, q_sector);
@@ -989,6 +1069,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             // A. Extract the raw eigenvector (vectorized density matrix)
                             //    We expect this to be a column vector
                             let rho_vec = eigenvectors.column(i).to_owned();
+
+                            let steady_state_probs = steady_state_spectrum(&basis_states, &rho_vec);
+                            // 1. Convert the spectrum into a single comma-separated string
+                            let spectrum_string = steady_state_probs
+                                .iter()
+                                .map(|val| format!("{}", val)) // High precision for small eigenvalues
+                                .collect::<Vec<String>>()
+                                .join(", ");
+
+                            // 2. Write it out: omega, g, then the raw numbers
+                            // writeln!(file, "{}, {}, {}", omega, g, spectrum_string)?;
+                            // println!("{}, {}, {:?}", omega, g, steady_state_probs.as_slice().unwrap());
+                            writeln!(file_std_eigenvalues, "{}, {}, {}", g, omega, spectrum_string)?;
 
                             // B. Compute Normalization Factor Z = Tr[rho]
                             //    using the 'compute_trace' function we defined earlier
