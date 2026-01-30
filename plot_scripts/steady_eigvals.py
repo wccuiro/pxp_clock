@@ -2,38 +2,44 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
 
-# 1. Load the dataset
-# header=None is used because the CSV does not have a label row
-df = pd.read_csv('./../rust/std_eigenvalues.csv', header=None)
+# Load the data
+df = pd.read_csv('../rust/std_eigenvalues.csv', header=None)
+omega = df.iloc[:, 1].values
+g_val = df.iloc[0, 0]
 
-# 2. Extract the variables based on your data structure:
-# Column 0: Gamma (constant)
-# Column 1: Omega (the independent variable)
-# Columns 2 to the end: Eigenvalues
-gamma_const = df.iloc[0, 0]
-omega_vals = df.iloc[:, 1]
-eigen_vals = df.iloc[:, 2:]
+# Define column indices for Eigenvalues and Occupations
+ev_cols = list(range(2, df.shape[1], 2))
+occ_cols = list(range(3, df.shape[1], 2))
 
-# 3. Create the Plot
-plt.figure(figsize=(12, 7))
+# Extract data into numpy arrays for sorting
+ev_data = df.iloc[:, ev_cols].values
+occ_data = df.iloc[:, occ_cols].values
 
-# We use a colormap to distinguish the 40+ eigenvalue lines
-colors = plt.cm.viridis(np.linspace(0, 1, eigen_vals.shape[1]))
+# Sort eigenvalues at each Omega, and rearrange occupations to match
+sort_idx = np.argsort(ev_data, axis=1)
+sorted_evs = np.take_along_axis(ev_data, sort_idx, axis=1)
+sorted_occs = np.take_along_axis(occ_data, sort_idx, axis=1)
 
-# Optional: Sort eigenvalues at each point to see the band structure clearly
-# If you want to see the raw trajectories instead, use `eigen_vals.values`
-sorted_eigen = np.sort(eigen_vals.values, axis=1)
+# Plotting
+plt.figure(figsize=(12, 8))
+cmap = plt.get_cmap('cool') # High contrast colormap
 
-for i in range(sorted_eigen.shape[1]):
-    plt.plot(omega_vals, sorted_eigen[:, i], color=colors[i], linewidth=1.2, alpha=0.8)
+# Loop through sorted levels to plot
+for i in range(sorted_evs.shape[1]):
+    sc = plt.scatter(omega, sorted_evs[:, i], c=sorted_occs[:, i], 
+                     cmap=cmap, s=6, vmin=0, vmax=0.5, edgecolors='none')
 
-# 4. Formatting the plot
+# Add Colorbar
+cbar = plt.colorbar(sc)
+cbar.set_label('Occupation', fontsize=12)
+
+# Labels and Formatting
 plt.xlabel(r'$\Omega$', fontsize=14)
 plt.ylabel('Eigenvalues', fontsize=14)
-plt.title(r'Eigenvalue Spectrum vs $\Omega$ (at $\gamma = {gamma_const}$)', fontsize=16)
-plt.grid(True, linestyle='--', alpha=0.6)
-
-# 5. Display or Save
+plt.title(r'Eigenvalue Spectrum vs $\Omega$ (g = {g_val})'.format(g_val=g_val), fontsize=16)
+plt.grid(True, linestyle='--', alpha=0.4)
+plt.xlim(0, 30)
+plt.ylim(0, 1)
 plt.tight_layout()
+
 plt.show()
-# plt.savefig('eigenvalue_plot.png', dpi=300)
