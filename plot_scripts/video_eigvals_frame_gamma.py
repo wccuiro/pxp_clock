@@ -36,7 +36,7 @@ for i, gamma in enumerate(unique_gammas):
     
     # Plot each level
     for j in range(sorted_evs.shape[1]):
-        sc = plt.scatter(omega, sorted_evs[:, j], c=sorted_occs[:, j], 
+        sc = plt.scatter(omega, sorted_occs[:, j], c=sorted_evs[:, j], 
                          cmap=cmap, s=3, vmin=0, vmax=0.5, edgecolors='none')
     
     # Add persistent colorbar and labels
@@ -44,9 +44,9 @@ for i, gamma in enumerate(unique_gammas):
     cbar.set_label('Occupation', fontsize=12)
     plt.xlabel(r'$\Omega$', fontsize=14)
     plt.ylabel('Eigenvalues', fontsize=14)
-    plt.yscale('log')
+    # plt.yscale('log')
     plt.xlim(0, 30)
-    plt.ylim(0, 1)
+    plt.ylim(1e-10, 1)
     plt.title(r'Eigenvalue Spectrum vs $\Omega$ ($\gamma = {gamma:.3f}$)'.format(gamma=gamma), fontsize=16)
     plt.grid(True, linestyle='--', alpha=0.4)
     
@@ -55,7 +55,7 @@ for i, gamma in enumerate(unique_gammas):
     plt.ylim(df.iloc[:, ev_cols].min().min(), df.iloc[:, ev_cols].max().max())
     
     # Save the frame with a padded index for ffmpeg compatibility
-    filename = f"../data/video_eigvals/frame_{i:03d}.png"
+    filename = f"../data/video_ss_vals/gamma_per_frame/frame_{i:03d}.png"
     plt.tight_layout()
     plt.savefig(filename, dpi=150)
     plt.close() # Close figure to free memory

@@ -1030,8 +1030,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // println!("✓ Dissipation complete!");
     
     // println!("\nBuilding Lindbladian...");
-    let g_values = Array1::linspace(0.01, 10.0, 20);
-    let omega_values = Array1::linspace(0.0, 30.0, 200);
+    let g_values = Array1::linspace(0.1, 2.0, 200);
+    let omega_values = Array1::linspace(0.0, 30.0, 20);
 
     let mut file_occupation = File::create("occupation.csv")?;
     writeln!(file_occupation, "n,nn,g,omega")?;
