@@ -5,7 +5,7 @@ import os
 
 # 1. Load the dataset
 # Assumes structure: gamma, omega, ev1, occ1, ev2, occ2, ...
-df = pd.read_csv('../rust/std_eigenvalues.csv', header=None)
+df = pd.read_csv('../rust/std_eigenvalues_server.csv', header=None)
 
 # 2. Get unique gamma values and sort them to ensure a smooth video
 unique_gammas = np.sort(df.iloc[:, 0].unique())
@@ -36,17 +36,17 @@ for i, gamma in enumerate(unique_gammas):
     
     # Plot each level
     for j in range(sorted_evs.shape[1]):
-        sc = plt.scatter(omega, sorted_occs[:, j], c=sorted_evs[:, j], 
-                         cmap=cmap, s=3, vmin=0, vmax=0.5, edgecolors='none')
+        sc = plt.scatter(omega, sorted_occs[:, j], c=-sorted_evs[:, j]*np.log(sorted_evs[:, j]), 
+                         cmap=cmap, s=3, vmin=0, vmax=0.4, edgecolors='none')
     
     # Add persistent colorbar and labels
     cbar = plt.colorbar(sc)
-    cbar.set_label('Occupation', fontsize=12)
+    cbar.set_label('S', fontsize=12)
     plt.xlabel(r'$\Omega$', fontsize=14)
-    plt.ylabel('Eigenvalues', fontsize=14)
+    plt.ylabel('Occupation', fontsize=14)
     # plt.yscale('log')
-    plt.xlim(0, 30)
-    plt.ylim(1e-10, 1)
+    plt.xlim(0, 10)
+    plt.ylim(-0.1, 0.6)
     plt.title(r'Eigenvalue Spectrum vs $\Omega$ ($\gamma = {gamma:.3f}$)'.format(gamma=gamma), fontsize=16)
     plt.grid(True, linestyle='--', alpha=0.4)
     

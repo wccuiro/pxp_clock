@@ -4,7 +4,7 @@ import numpy as np
 
 # 1. Load your data
 # Structure assumed: [Gamma, Omega, E1, Occ1, E2, Occ2, ...]
-df = pd.read_csv('../rust/std_eigenvalues.csv', header=None)
+df = pd.read_csv('../rust/std_eigenvalues_server.csv', header=None)
 
 # 2. Setup Frames (Iterate over unique Omega values)
 unique_omegas = np.sort(df.iloc[:, 1].unique())
@@ -36,26 +36,27 @@ for i, omega in enumerate(unique_omegas):
     
     # Scatter plot for each eigen-level
     for j in range(sorted_evs.shape[1]):
-        sc = plt.scatter(gamma_axis, sorted_occs[:, j], c=-np.log(sorted_evs[:, j]), 
-                         cmap=cmap, s=15, vmin=0, vmax=10, edgecolors='none')
+        sc = plt.scatter(gamma_axis, sorted_occs[:, j], c=-sorted_evs[:, j]*np.log(sorted_evs[:, j]), 
+                         cmap=cmap, s=15, vmin=0, vmax=0.4, edgecolors='none')
     
     # --- LOG SCALE & LABELS ---
     # plt.yscale('log')  # <--- Log scale set here
     plt.xlabel(r'$\gamma$', fontsize=14)
-    plt.ylabel('Eigenvalues (log scale)', fontsize=14)
-    plt.title(f'Spectrum vs $\gamma$ at $\Omega = {omega:.3f}$', fontsize=16)
+    plt.ylabel('Occupation', fontsize=14)
+    plt.title(r'Spectrum vs $\gamma$ at $\Omega = {omega:.3f}$'.format(omega=omega), fontsize=16)
     
     # --- FIXED AXIS LIMITS ---
-    plt.ylim(1e-10, 1)  # Example fixed y-limits
+    plt.ylim(-0.1, 0.6)  # Example fixed y-limits
     plt.xlim(0, 2)
     
     # --- COLORBAR ---
     cbar = plt.colorbar(sc)
-    cbar.set_label('Occupation', fontsize=12)
+    cbar.set_label('S', fontsize=12)
     plt.grid(True, which="both", linestyle='--', alpha=0.3)
     
     # --- SAVING THE FRAME ---
-    filename = f'frame_{i:03d}.png'
+    filename = f"../data/video_ss_vals/omega_per_frame/frame_{i:03d}.png"
+    # filename = f'frame_{i:03d}.png'
     plt.tight_layout()
     plt.savefig(filename, dpi=150) # <--- File saved here
     plt.close() # Close memory

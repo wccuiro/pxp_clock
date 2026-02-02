@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 # Load the data
-df = pd.read_csv('../rust/std_eigenvalues.csv', header=None)
+df = pd.read_csv('../rust/std_eigenvalues_server.csv', header=None)
 omega = df.iloc[:, 1].values
 g_val = df.iloc[0, 0]
 
@@ -34,6 +34,7 @@ cbar = plt.colorbar(sc)
 cbar.set_label('Occupation', fontsize=12)
 
 # Labels and Formatting
+plt.yscale('log')
 plt.xlabel(r'$\Omega$', fontsize=14)
 plt.ylabel('Eigenvalues', fontsize=14)
 plt.title(r'Eigenvalue Spectrum vs $\Omega$ (g = {g_val})'.format(g_val=g_val), fontsize=16)
