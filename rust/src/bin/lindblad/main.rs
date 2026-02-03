@@ -970,7 +970,7 @@ fn steady_state_properties(
 // let expectation_value = compute_trace_of_vectorized(l, &basis_states, &aux_vec, q_sector);
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let l = 8;
+    let l = 12;
     let q_sector = 0;
     // let omega = 1.0;
     // let gamma_plus = 1.0;
@@ -1030,8 +1030,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // println!("✓ Dissipation complete!");
     
     // println!("\nBuilding Lindbladian...");
-    let g_values = Array1::linspace(0.1, 2.0, 200);
-    let omega_values = Array1::linspace(0.0, 30.0, 20);
+    let g_values = Array1::linspace(0.1, 2.0, 2);
+    let omega_values = Array1::linspace(0.0, 30.0, 1);
 
     let mut file_occupation = File::create("occupation.csv")?;
     writeln!(file_occupation, "n,nn,g,omega")?;
@@ -1041,6 +1041,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let n_matrix = occupation_number(l, &basis_states, q_sector);
     let corr_matrix = density_correlation_nnn(l, &basis_states, q_sector);
+    
+    let mut file = File::create("eigenvalues.csv")?;
 
     for &g in &g_values {
         for &omega in &omega_values {
@@ -1060,6 +1062,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             
             // println!("\nComputing eigenvalues...");
             // We capture 'eigenvectors' (removed the underscore _ so compiler knows we use it)
+
             match l_cal_dense.eig() {
                 Ok((eigenvalues, eigenvectors)) => {
                     // println!("✓ Eigenvalues computed ({} values)\n", eigenvalues.len());
@@ -1069,13 +1072,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     // println!("Building observable matrices...");
 
 
-                    let mut file = File::create("eigenvalues.csv")?;
-                    writeln!(file, "real,imaginary")?;
+                    // writeln!(file, "real,imaginary")?;
 
                     
                     // 2. Iterate with enumerate to get the index 'i' directly
                     for (i, eval) in eigenvalues.iter().enumerate() {
-                        
+                        write!(file, "{},{},{},{}", g, omega, eval.re, eval.im)?;
+                        if i < eigenvalues.len() - 1 {
+                            write!(file, ",")?;
+                        }
                         // Check for Steady State (Real part approx 0, Imag part approx 0)
                         if eval.re.abs() < 1e-8 && eval.im.abs() < 1e-8 {
                             // println!("\n--- Steady State Found (Index {}) ---", i);
@@ -1096,7 +1101,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .join(", ");
 
                             // Write: g, omega, list...
-                            writeln!(file_std_eigenvalues, "{}, {}, {}", g, omega, formatted_data)?;
+                            writeln!(file_std_eigenvalues, "{},{},{}", g, omega, formatted_data)?;
 
                             // B. Compute Normalization Factor Z = Tr[rho]
                             //    using the 'compute_trace' function we defined earlier
@@ -1123,8 +1128,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             // println!("-------------------------------------\n");
                         }
 
-                        writeln!(file, "{},{}", eval.re, eval.im)?;
+                        // writeln!(file, "{},{}", eval.re, eval.im)?;
                     }
+                    writeln!(file)?;
                     // println!("✓ Eigenvalues saved to eigenvalues.csv");
                     
                     // println!("\nFirst 10 eigenvalues:");
