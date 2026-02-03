@@ -1,5 +1,5 @@
 use ndarray::{Array1,Array2};
-use ndarray_linalg::{Eig, Eigh};
+// use ndarray_linalg::{Eig, Eigh};
 use num_complex::Complex64;
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
@@ -875,129 +875,134 @@ fn compute_trace(
 }
 
 
-/// Computes <O> = Sum(|c_j|^2 * o_j) / Sum(|c_j|^2) for a given eigenvector
-fn compute_eigenstate_observable(
-    eigenvector: &Array1<Complex64>, 
-    basis_observables: &[f64], 
-) -> f64 {
-    let mut obs_sum = 0.0;
-    let mut norm_sum = 0.0;
+// fn compute_eigenstate_observable(
+//     eigenvector: &Array1<Complex64>, 
+//     basis_observables: &[f64], 
+// ) -> f64 {
+//     let mut obs_sum = 0.0;
+//     let mut norm_sum = 0.0;
     
-    // Iterate over the coefficients
-    for (i, &coeff) in eigenvector.iter().enumerate() {
-        let prob = coeff.norm_sqr();
-        obs_sum += prob * basis_observables[i];
-        norm_sum += prob;
-    }
+//     // Iterate over the coefficients
+//     for (i, &coeff) in eigenvector.iter().enumerate() {
+//         let prob = coeff.norm_sqr();
+//         obs_sum += prob * basis_observables[i];
+//         norm_sum += prob;
+//     }
 
-    if norm_sum > 1e-16 {
-        obs_sum / norm_sum
-    } else {
-        0.0
-    }
-}
+//     if norm_sum > 1e-16 {
+//         obs_sum / norm_sum
+//     } else {
+//         0.0
+//     }
+// }
 
-fn steady_state_properties(
-    l: usize,
-    basis_states: &[BasisState],
-    vectorized_op: &Array1<Complex64>,
-) -> Vec<(f64, f64)> {
+// fn steady_state_properties(
+//     l: usize,
+//     basis_states: &[BasisState],
+//     vectorized_op: &Array1<Complex64>,
+// ) -> Vec<(f64, f64)> {
     
-    let mut results = Vec::new();
-    let mut current_offset = 0;
-    let mut i = 0;
+//     let mut results = Vec::new();
+//     let mut current_offset = 0;
+//     let mut i = 0;
 
-    while i < basis_states.len() {
-        let current_k = basis_states[i].k;
-        let mut block_len = 0;
-        while i + block_len < basis_states.len() && basis_states[i + block_len].k == current_k {
-            block_len += 1;
-        }
+//     while i < basis_states.len() {
+//         let current_k = basis_states[i].k;
+//         let mut block_len = 0;
+//         while i + block_len < basis_states.len() && basis_states[i + block_len].k == current_k {
+//             block_len += 1;
+//         }
 
-        let dim = (block_len as f64).sqrt() as usize;
+//         let dim = (block_len as f64).sqrt() as usize;
 
-        if dim > 0 {
-            let mut rho_block = Array2::<Complex64>::zeros((dim, dim));
-            for row in 0..dim {
-                for col in 0..dim {
-                    let vec_idx = current_offset + (row * dim + col);
-                    rho_block[[row, col]] = vectorized_op[vec_idx];
-                }
-            }
+//         if dim > 0 {
+//             let mut rho_block = Array2::<Complex64>::zeros((dim, dim));
+//             for row in 0..dim {
+//                 for col in 0..dim {
+//                     let vec_idx = current_offset + (row * dim + col);
+//                     rho_block[[row, col]] = vectorized_op[vec_idx];
+//                 }
+//             }
 
-            if let Ok((eigvals, eigvecs)) = rho_block.eigh(ndarray_linalg::UPLO::Upper) {
+//             if let Ok((eigvals, eigvecs)) = rho_block.eigh(ndarray_linalg::UPLO::Upper) {
                 
-                // Pre-compute Occupation Number
-                let basis_occupations: Vec<f64> = (0..dim).map(|n| {
-                    let diag_idx = current_offset + (n * dim + n);
-                    let state = &basis_states[diag_idx];
-                    let particle_count = state.states_a[0].count_ones() as f64;
-                    particle_count / (l as f64)
-                }).collect();
+//                 // Pre-compute Occupation Number
+//                 let basis_occupations: Vec<f64> = (0..dim).map(|n| {
+//                     let diag_idx = current_offset + (n * dim + n);
+//                     let state = &basis_states[diag_idx];
+//                     let particle_count = state.states_a[0].count_ones() as f64;
+//                     particle_count / (l as f64)
+//                 }).collect();
 
-                // Compute for each Eigenvector
-                for (idx, &lambda) in eigvals.iter().enumerate() {
-                    // CHANGE: .to_owned() creates a standard Array1 from the column view
-                    let eigenvector = eigvecs.column(idx).to_owned();
+//                 // Compute for each Eigenvector
+//                 for (idx, &lambda) in eigvals.iter().enumerate() {
+//                     // CHANGE: .to_owned() creates a standard Array1 from the column view
+//                     let eigenvector = eigvecs.column(idx).to_owned();
                     
-                    // Now we pass &Array1, which is compatible with the new signature
-                    let occ = compute_eigenstate_observable(&eigenvector, &basis_occupations);
+//                     // Now we pass &Array1, which is compatible with the new signature
+//                     let occ = compute_eigenstate_observable(&eigenvector, &basis_occupations);
                     
-                    results.push((lambda, occ));
-                }
-            }
-        }
+//                     results.push((lambda, occ));
+//                 }
+//             }
+//         }
 
-        current_offset += block_len;
-        i += block_len;
-    }
+//         current_offset += block_len;
+//         i += block_len;
+//     }
 
-    // Normalize Spectrum
-    let trace: f64 = results.iter().map(|(lam, _)| lam).sum();
-    if trace.abs() > 1e-15 {
-        for (lam, _) in results.iter_mut() {
-            *lam /= trace;
-        }
-    }
+//     // Normalize Spectrum
+//     let trace: f64 = results.iter().map(|(lam, _)| lam).sum();
+//     if trace.abs() > 1e-15 {
+//         for (lam, _) in results.iter_mut() {
+//             *lam /= trace;
+//         }
+//     }
 
-    // Sort Descending
-    results.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+//     // Sort Descending
+//     results.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
 
-    results
-}
+//     results
+// }
 
 // Usage in main:
 // let expectation_value = compute_trace_of_vectorized(l, &basis_states, &aux_vec, q_sector);
 
-fn occ_evolution(
+fn obs_evolution(
     l: usize,
+    n_matrix: &Array2<Complex64>,
+    corr_matrix: &Array2<Complex64>,
     basis_states: &[BasisState],
     q_sector: i64,
     initial: &Array1<Complex64>,
     lindbladian: &Array2<Complex64>,
     dt: f64,
     t_final: f64,
-) -> Array1<f64> {
-    let n_matrix = occupation_number(l, basis_states, q_sector);
+) -> Array1<(f64, f64)> {
+    // let n_matrix = occupation_number(l, basis_states, q_sector);
 
     let num_steps = (t_final / dt).round() as usize;
-    let mut results = Vec::with_capacity(num_steps + 1);
+
+    let mut observables = Vec::with_capacity(num_steps + 1);
     
     let mut current_rho = initial.clone();
 
     for _step in 0..=num_steps {
+        
         let obs_state = n_matrix.dot(&current_rho);
-
         let expectation_val = compute_trace(l, basis_states, &obs_state, q_sector);
         
-        results.push(expectation_val.re);
+        let corr_state = corr_matrix.dot(&current_rho);
+        let corr_val = compute_trace(l, basis_states, &corr_state, q_sector);
+
+        observables.push((expectation_val.re, corr_val.re));
 
         let derivative = lindbladian.dot(&current_rho);
         current_rho = current_rho + &derivative * dt;
         current_rho /= compute_trace(l, basis_states, &current_rho, q_sector);
     }
 
-    Array1::from(results)
+    Array1::from(observables)
 }
 
 
@@ -1064,8 +1069,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // writeln!(file_occupation, "g,omega")?;
 
 
-    let g_values = Array1::linspace(0.1, 2.0, 3);
-    let omega_values = Array1::linspace(0.0, 10.0, 3);
+    let g_values = Array1::linspace(0.1, 2.0, 10);
+    let omega_values = Array1::linspace(0.0, 10.0, 10);
 
     let n_matrix = occupation_number(l, &basis_states, q_sector);
     let corr_matrix = density_correlation_nnn(l, &basis_states, q_sector);
@@ -1085,8 +1090,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
 
             // In your main loop:
-            let occupation = occ_evolution(
-                l, 
+            let observables = obs_evolution(
+                l,
+                &n_matrix,
+                &corr_matrix, 
                 &basis_states, 
                 q_sector, 
                 &rho_vec,       // Your initialized |Neel><Neel| vector
@@ -1095,8 +1102,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 10.0            // t_final
             );
 
-            let formatted_data = occupation.iter()
-                .map(|p| format!("{:.16}", p))
+            let formatted_data = observables.iter()
+                .map(|(n,nn)| format!("{:.16}, {:.16}", n, nn))
                 .collect::<Vec<String>>()
                 .join(", ");
 
