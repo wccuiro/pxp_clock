@@ -7,7 +7,7 @@ from matplotlib.widgets import Slider
 # ---------------------------------------------------------
 print("Loading data...")
 try:
-    df = pd.read_csv('../rust/std_eigenvalues_server.csv', header=None)
+    df = pd.read_csv('../rust/std_eigenvalues_10.csv', header=None)
 except FileNotFoundError:
     print("Error: 'std_eigenvalues_server.csv' not found.")
     exit()

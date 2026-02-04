@@ -4,7 +4,7 @@ import numpy as np
 
 # 1. Load your data
 # Structure assumed: [Gamma, Omega, E1, Occ1, E2, Occ2, ...]
-df = pd.read_csv('../rust/std_eigenvalues_server.csv', header=None)
+df = pd.read_csv('../rust/std_eigenvalues_10.csv', header=None)
 
 # 2. Setup Frames (Iterate over unique Omega values)
 unique_omegas = np.sort(df.iloc[:, 1].unique())
@@ -57,7 +57,7 @@ for i, omega in enumerate(unique_omegas):
     # --- SAVING THE FRAME ---
     filename = f"../data/video_ss_vals/omega_per_frame/frame_{i:03d}.png"
     # filename = f'frame_{i:03d}.png'
-    plt.tight_layout()
+    # plt.tight_layout()
     plt.savefig(filename, dpi=150) # <--- File saved here
     plt.close() # Close memory
     

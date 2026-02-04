@@ -4,7 +4,7 @@ import seaborn as sns
 import numpy as np
 
 # 1. Load Data
-df = pd.read_csv('../rust/occupation.csv')
+df = pd.read_csv('../rust/occupation_10.csv')
 
 # 2. Calculate Renormalized Deviation
 # The incoherent theory predicts: <nn> = [(3g+1)/g]*<n> - 1

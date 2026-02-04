@@ -5,7 +5,7 @@ import os
 
 # 1. Load the dataset
 # Assumes structure: gamma, omega, ev1, occ1, ev2, occ2, ...
-df = pd.read_csv('../rust/std_eigenvalues_server.csv', header=None)
+df = pd.read_csv('../rust/std_eigenvalues_10.csv', header=None)
 
 # 2. Get unique gamma values and sort them to ensure a smooth video
 unique_gammas = np.sort(df.iloc[:, 0].unique())
@@ -45,7 +45,7 @@ for i, gamma in enumerate(unique_gammas):
     plt.xlabel(r'$\Omega$', fontsize=14)
     plt.ylabel('Occupation', fontsize=14)
     # plt.yscale('log')
-    plt.xlim(0, 10)
+    plt.xlim(0, 30)
     plt.ylim(-0.1, 0.6)
     plt.title(r'Eigenvalue Spectrum vs $\Omega$ ($\gamma = {gamma:.3f}$)'.format(gamma=gamma), fontsize=16)
     plt.grid(True, linestyle='--', alpha=0.4)
@@ -56,7 +56,7 @@ for i, gamma in enumerate(unique_gammas):
     
     # Save the frame with a padded index for ffmpeg compatibility
     filename = f"../data/video_ss_vals/gamma_per_frame/frame_{i:03d}.png"
-    plt.tight_layout()
+    # plt.tight_layout()
     plt.savefig(filename, dpi=150)
     plt.close() # Close figure to free memory
     

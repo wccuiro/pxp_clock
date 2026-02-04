@@ -6,7 +6,7 @@ from mpl_toolkits.mplot3d import Axes3D
 
 # 1. Load the data
 # ---------------------------------------------------------
-df = pd.read_csv('../rust/occupation.csv')
+df = pd.read_csv('../rust/occupation_10.csv')
 
 # Ensure data is sorted for consistent plotting
 df = df.sort_values(by=['g', 'omega'])
@@ -27,9 +27,20 @@ Z = pivot_table.values                  # Z = Occupation n
 # --- Plot A: 2D Heatmap (Phase Diagram) ---
 plt.figure(figsize=(10, 8))
 # Note: seaborn heatmap index 0 is at the top by default, so we invert y-axis
-ax = sns.heatmap(pivot_table, cmap='viridis', 
-                 xticklabels=2, yticklabels=2) # Adjust tick frequency if crowded
+plot_data = pivot_table.copy()
+plot_data.index = plot_data.index.map('{:.2f}'.format)
+plot_data.columns = plot_data.columns.map('{:.2f}'.format)
+
+# 2. Plot using the formatted data
+ax = sns.heatmap(plot_data, cmap='viridis', 
+                 xticklabels=5, yticklabels=5, vmin=0, vmax=0.5)
+
+# 3. Rotate x-axis labels if they are still overlapping
+plt.xticks(rotation=45, ha='right')
+plt.yticks(rotation=0) # Keeps y-axis horizontal
+
 ax.invert_yaxis() 
+
 plt.title('Phase Diagram: Occupation $n$')
 plt.xlabel(r'Scaled Drive $\Omega / \gamma_-$')
 plt.ylabel(r'Dissipation Ratio $g = \gamma_+ / \gamma_-$')
@@ -60,11 +71,11 @@ plt.show()
 plt.figure(figsize=(10, 6))
 # Select a few evenly spaced values of Omega to plot
 unique_omega = df['omega'].unique()
-selected_omega = unique_omega[np.linspace(0, len(unique_omega)-1, 6, dtype=int)]
+selected_omega = unique_omega[:20:3]
 
 for omega_val in selected_omega:
     subset = df[df['omega'] == omega_val]
-    plt.plot(subset['g'], subset['n'], label=f'$\Omega$={omega_val:.2f}', marker='.')
+    plt.plot(subset['g'], subset['n'], label=r'$\Omega$={omega_val:.2f}'.format(omega_val=omega_val), marker='.')
 
 plt.xlabel(r'$g = \gamma_+ / \gamma_-$')
 plt.ylabel('Occupation $n$')
@@ -109,9 +120,8 @@ plt.show()
 # --- Plot F: Contour Plot ---
 plt.figure(figsize=(10, 8))
 # Filled contours
-cp = plt.contourf(X, Y, Z, levels=20, cmap='viridis')
+cp = plt.contourf(X, Y, Z, levels=20, cmap='viridis', vmin=0, vmax=0.5)
 cbar = plt.colorbar(cp)
-cbar.set_label('Occupation $n$')
 # Line contours
 lines = plt.contour(X, Y, Z, levels=10, colors='white', linewidths=0.5, alpha=0.5)
 plt.clabel(lines, inline=True, fontsize=8)

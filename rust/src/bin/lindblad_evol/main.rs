@@ -427,7 +427,7 @@ fn build_lindbladian(
     //     .enumerate()
     //     .for_each(|(j, row_slice)| {
     let triplets: Vec<(usize, usize, Complex64)> = (0..dim)
-        .into_par_iter()
+        .into_iter()
         .flat_map(|j| {
             let mut local_triplets = Vec::new();
 
@@ -688,7 +688,7 @@ fn occupation_number(
     let mut n_cal = Array2::<Complex64>::zeros((dim, dim));
     
     let rows: Vec<_> = (0..dim)
-        .into_par_iter()
+        .into_iter()
         .map(|j| {
             let mut row = vec![Complex64::new(0.0, 0.0); dim];
             
@@ -762,7 +762,7 @@ fn density_correlation_nnn(
     let mut corr_cal = Array2::<Complex64>::zeros((dim, dim));
     
     let rows: Vec<_> = (0..dim)
-        .into_par_iter()
+        .into_iter()
         .map(|j| {
             let mut row = vec![Complex64::new(0.0, 0.0); dim];
             
@@ -849,7 +849,7 @@ fn compute_trace(
 
     // Sum_j (coeff_j * <B_j | A_j>)
     vectorized_op.as_slice().unwrap()
-        .par_iter()
+        .iter()
         .enumerate()
         .map(|(i, &coeff)| {
             if coeff.norm() <= THRESHOLD {
@@ -1005,11 +1005,17 @@ fn obs_evolution(
     Array1::from(observables)
 }
 
+// use itertools::iproduct; // Import this
+
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let l = 8;
+    // ----------------------------------------------------------------
+    // 1. SYSTEM SETUP (Single Threaded / Setup Phase)
+    // ----------------------------------------------------------------
+    let l = 10;
     let q_sector = 0;
     
+    // --- Basis Construction ---
     let basis = translationally_invariant_basis(l);    
     
     let mut basis_per_sector: HashMap<i64, Vec<u64>> = HashMap::new();
@@ -1046,9 +1052,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-
+    // --- Initial State (Neel x Neel) ---
     let neel_key: u64 = (4u64.pow(l as u32 / 2) - 1) / 3;
-
     let mut rho_vec = Array1::<Complex64>::zeros(basis_states.len());
 
     if let Some(idx) = basis_states.iter().position(|s| 
@@ -1060,27 +1065,41 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("Néel state not found. Check if the k-sector allows it.");
     }
 
-    println!("{:}", basis_states.len());
+    println!("Basis Dimension: {:}", basis_states.len());
 
-    println!("{:}", rho_vec.len());
-
-
-    let mut file_occupation = File::create("occupation_time.csv")?;
-    // writeln!(file_occupation, "g,omega")?;
-
-
-    let g_values = Array1::linspace(0.1, 2.0, 10);
-    let omega_values = Array1::linspace(0.0, 10.0, 10);
-
+    // --- Pre-compute Constant Matrices ---
+    // These are read-only and shared across all threads
     let n_matrix = occupation_number(l, &basis_states, q_sector);
     let corr_matrix = density_correlation_nnn(l, &basis_states, q_sector);
 
+    // ----------------------------------------------------------------
+    // 2. PARAMETER SWEEP PREPARATION
+    // ----------------------------------------------------------------
+    let g_values = Array1::linspace(0.1, 2.0, 4);
+    let omega_values = Array1::linspace(0.0, 10.0, 4);
+
+    // Flatten parameters into a single vector of pairs (g, omega)
+    let mut parameters = Vec::new();
     for &g in &g_values {
         for &omega in &omega_values {
+            parameters.push((g, omega));
+        }
+    }
+
+    // ----------------------------------------------------------------
+    // 3. PARALLEL EVOLUTION
+    // ----------------------------------------------------------------
+    // We parallelize over the parameters. 
+    // IMPORTANT: Ensure build_lindbladian and compute_trace use SERIAL iterators now.
+    let results: Vec<String> = parameters.par_iter()
+        .map(|&(g, omega)| {
             let gamma_minus = 1.0;
             let gamma_plus = g * gamma_minus;
+            
+            // Build Lindbladian (This runs on a single thread now)
             let l_cal = build_lindbladian(l, &basis_states, q_sector, omega, gamma_plus, gamma_minus);
 
+            // Convert sparse to dense (if needed by your solver)
             let l_cal_dense = {
                 let mut dense = Array2::<Complex64>::zeros((basis_states.len(), basis_states.len()));
                 for (val, (row, col)) in l_cal.iter() {
@@ -1089,27 +1108,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 dense
             };
 
-            // In your main loop:
+            // Run Time Evolution (This runs on a single thread now)
             let observables = obs_evolution(
                 l,
                 &n_matrix,
                 &corr_matrix, 
                 &basis_states, 
                 q_sector, 
-                &rho_vec,       // Your initialized |Neel><Neel| vector
-                &l_cal_dense,         // Your Lindbladian matrix
-                0.0001,           // dt
+                &rho_vec,       
+                &l_cal_dense,   
+                0.0001,         // dt
                 10.0            // t_final
             );
 
+            // Format data into a CSV string immediately
             let formatted_data = observables.iter()
-                .map(|(n,nn)| format!("{:.16}, {:.16}", n, nn))
+                .map(|(n, nn)| format!("{:.16}, {:.16}", n, nn))
                 .collect::<Vec<String>>()
                 .join(", ");
 
-            writeln!(file_occupation, "{}, {}, {}", g, omega, formatted_data)?;
+            format!("{}, {}, {}", g, omega, formatted_data)
+        })
+        .collect(); // Collect all results into a vector
 
-        }    
+    // ----------------------------------------------------------------
+    // 4. FILE OUTPUT (Sequential)
+    // ----------------------------------------------------------------
+    let mut file_occupation = File::create("occupation_time.csv")?;
+    // Optional: Write header
+    // writeln!(file_occupation, "g,omega,data...")?;
+
+    for line in results {
+        writeln!(file_occupation, "{}", line)?;
     }
+
     Ok(())
 }
