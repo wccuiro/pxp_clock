@@ -4,9 +4,21 @@ import seaborn as sns
 import numpy as np
 from mpl_toolkits.mplot3d import Axes3D
 
+# ==========================================
+# 0. Configuration / Controls
+# ==========================================
+# Set the maximum values you want to include in the plots
+MAX_OMEGA = 5.0  # Will plot omega up to 5.0
+MAX_G = 2.0      # Will plot g up to 2.0
+
 # 1. Load the data
 # ---------------------------------------------------------
-df = pd.read_csv('../rust/occupation_10.csv')
+df = pd.read_csv('../rust/occupation_8.csv')
+
+# --- FILTERING STEP ---
+# Keep only rows where omega and g are within your desired limits
+df = df[(df['omega'] <= MAX_OMEGA) & (df['g'] <= MAX_G)]
+# ----------------------
 
 # Ensure data is sorted for consistent plotting
 df = df.sort_values(by=['g', 'omega'])
@@ -26,22 +38,22 @@ Z = pivot_table.values                  # Z = Occupation n
 
 # --- Plot A: 2D Heatmap (Phase Diagram) ---
 plt.figure(figsize=(10, 8))
-# Note: seaborn heatmap index 0 is at the top by default, so we invert y-axis
 plot_data = pivot_table.copy()
+
+# Format labels
 plot_data.index = plot_data.index.map('{:.2f}'.format)
 plot_data.columns = plot_data.columns.map('{:.2f}'.format)
 
-# 2. Plot using the formatted data
+# Plot using the formatted data
+# Note: I removed ax.set_xlim because the data is already filtered!
 ax = sns.heatmap(plot_data, cmap='viridis', 
-                 xticklabels=5, yticklabels=5, vmin=0, vmax=0.5)
+                 xticklabels=5, yticklabels=15, vmin=0, vmax=0.5)
 
-# 3. Rotate x-axis labels if they are still overlapping
 plt.xticks(rotation=45, ha='right')
-plt.yticks(rotation=0) # Keeps y-axis horizontal
-
+plt.yticks(rotation=0) 
 ax.invert_yaxis() 
 
-plt.title('Phase Diagram: Occupation $n$')
+plt.title(f'Phase Diagram (Filtered: $\Omega \leq {MAX_OMEGA}, g \leq {MAX_G}$)')
 plt.xlabel(r'Scaled Drive $\Omega / \gamma_-$')
 plt.ylabel(r'Dissipation Ratio $g = \gamma_+ / \gamma_-$')
 plt.tight_layout()
@@ -50,8 +62,8 @@ plt.show()
 
 # --- Plot B: Line Cuts (n vs Omega for fixed g) ---
 plt.figure(figsize=(10, 6))
-# Select a few evenly spaced values of g to plot
 unique_g = df['g'].unique()
+# Select 6 evenly spaced values from the filtered range
 selected_g = unique_g[np.linspace(0, len(unique_g)-1, 6, dtype=int)]
 
 for g_val in selected_g:
@@ -60,6 +72,7 @@ for g_val in selected_g:
 
 plt.xlabel(r'$\Omega / \gamma_-$')
 plt.ylabel('Occupation $n$')
+# Removed manual xlim, it now scales automatically to your data
 plt.title(r'Occupation vs Drive $\Omega$ (Fixed Dissipation Ratio)')
 plt.legend(title='Ratio $g$')
 plt.grid(True, alpha=0.3)
@@ -69,13 +82,14 @@ plt.show()
 
 # --- Plot C: Line Cuts (n vs g for fixed Omega) ---
 plt.figure(figsize=(10, 6))
-# Select a few evenly spaced values of Omega to plot
 unique_omega = df['omega'].unique()
-selected_omega = unique_omega[:20:3]
+# Select a few evenly spaced values from the filtered range
+step_size = max(1, len(unique_omega) // 6) # Ensure we get about 6 lines
+selected_omega = unique_omega[::step_size]
 
 for omega_val in selected_omega:
     subset = df[df['omega'] == omega_val]
-    plt.plot(subset['g'], subset['n'], label=r'$\Omega$={omega_val:.2f}'.format(omega_val=omega_val), marker='.')
+    plt.plot(subset['g'], subset['n'], label=f'$\Omega$={omega_val:.2f}', marker='.')
 
 plt.xlabel(r'$g = \gamma_+ / \gamma_-$')
 plt.ylabel('Occupation $n$')
@@ -87,15 +101,13 @@ plt.savefig('3_lineplot_n_vs_g.png')
 plt.show()
 
 # --- Plot D: Gradient / Susceptibility Map ---
-# Calculate the gradient magnitude to find phase transitions
 grad_g, grad_omega = np.gradient(Z, g_vals, omega_vals)
 susceptibility = np.sqrt(grad_g**2 + grad_omega**2)
 
 plt.figure(figsize=(10, 8))
-# We use pcolormesh here for better axis control with raw values
 plt.pcolormesh(X, Y, susceptibility, cmap='inferno', shading='auto')
 plt.colorbar(label=r'Gradient Magnitude $|\nabla n|$')
-plt.title('Susceptibility Map (Phase Boundaries)')
+plt.title('Susceptibility Map')
 plt.xlabel(r'$\Omega / \gamma_-$')
 plt.ylabel(r'$g = \gamma_+ / \gamma_-$')
 plt.tight_layout()
@@ -112,17 +124,15 @@ ax.set_ylabel(r'$g = \gamma_+ / \gamma_-$')
 ax.set_zlabel('Occupation $n$')
 ax.set_title('3D Surface of Occupation')
 fig.colorbar(surf, ax=ax, shrink=0.5, aspect=10, label='Occupation $n$')
-ax.view_init(elev=30, azim=225) # Adjust camera angle
+ax.view_init(elev=30, azim=225)
 plt.tight_layout()
 plt.savefig('5_surface_plot.png')
 plt.show()
 
 # --- Plot F: Contour Plot ---
 plt.figure(figsize=(10, 8))
-# Filled contours
 cp = plt.contourf(X, Y, Z, levels=20, cmap='viridis', vmin=0, vmax=0.5)
 cbar = plt.colorbar(cp)
-# Line contours
 lines = plt.contour(X, Y, Z, levels=10, colors='white', linewidths=0.5, alpha=0.5)
 plt.clabel(lines, inline=True, fontsize=8)
 
