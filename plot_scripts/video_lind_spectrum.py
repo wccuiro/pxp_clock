@@ -1,107 +1,125 @@
-import streamlit as st
 import pandas as pd
+import numpy as np
 import plotly.graph_objects as go
+from dash import Dash, dcc, html, Input, Output
 
-# --- CONFIGURATION ---
-DATA_FILE = '../rust/eigenvalues_8.parquet' 
+# Load data efficiently
+print("Loading data...")
+df = pd.read_csv('../rust/eigenvalues_10.csv', header=None)
 
-# --- 1. LOAD DATA ---
-@st.cache_data
-def load_and_prep_data():
-    """Loads data and calculates global limits ONCE."""
-    # Load file
-    if DATA_FILE.endswith('.parquet'):
-        df = pd.read_parquet(DATA_FILE)
-    else:
-        df = pd.read_csv(DATA_FILE)
+gamma_vals = sorted(df[0].unique())
+omega_vals = sorted(df[1].unique())
+n_eigvals = (df.shape[1] - 2) // 2
 
-    # --- CALCULATE GLOBAL LIMITS (FIXED AXIS) ---
-    # We scan the entire dataset now so we never have to recalculate.
-    # Columns 0,1 are Gamma/Omega.
-    # Reals: Cols 2, 4, 6... | Imags: Cols 3, 5, 7...
+print(f"Found {len(gamma_vals)} gamma values, {len(omega_vals)} omega values")
+print(f"Number of eigenvalues per point: {n_eigvals}")
+
+# Pre-compute axis limits (skip first 2 columns which are gamma, omega)
+all_real = df.iloc[:, 2::2].values.flatten()
+all_imag = df.iloc[:, 3::2].values.flatten()
+x_range = [np.nanmin(all_real) * 1.05, np.nanmax(all_real) * 1.05]
+y_range = [np.nanmin(all_imag) * 1.05, np.nanmax(all_imag) * 1.05]
+
+print(f"Axis ranges: x={x_range}, y={y_range}")
+
+# Index for faster lookup
+df['gamma_idx'] = df[0].map({v: i for i, v in enumerate(gamma_vals)})
+df['omega_idx'] = df[1].map({v: i for i, v in enumerate(omega_vals)})
+df.drop(columns=[0, 1], inplace=True)
+df.set_index(['gamma_idx', 'omega_idx'], inplace=True)
+
+
+
+app = Dash(__name__)
+
+app.layout = html.Div([
+    dcc.Graph(id='spectrum-plot', style={'height': '70vh'}),
+    html.Div([
+        html.Label('γ (Gamma)', style={'font-weight': 'bold'}),
+        dcc.Slider(
+            id='gamma-slider',
+            min=0,
+            max=len(gamma_vals)-1,
+            value=len(gamma_vals)//2,
+            step=1,
+            marks={i: f'{gamma_vals[i]:.3f}' 
+                   for i in range(0, len(gamma_vals), max(1, len(gamma_vals)//10))},
+            updatemode='drag'  # Real-time updates while dragging
+        ),
+    ], style={'padding': '20px'}),
+    html.Div([
+        html.Label('ω (Omega)', style={'font-weight': 'bold'}),
+        dcc.Slider(
+            id='omega-slider',
+            min=0,
+            max=len(omega_vals)-1,
+            value=len(omega_vals)//2,
+            step=1,
+            marks={i: f'{omega_vals[i]:.3f}'
+                   for i in range(0, len(omega_vals), max(1, len(omega_vals)//10))},
+            updatemode='drag'  # Real-time updates while dragging
+        ),
+    ], style={'padding': '20px'}),
+])
+
+@app.callback(
+    Output('spectrum-plot', 'figure'),
+    Input('gamma-slider', 'value'),
+    Input('omega-slider', 'value')
+)
+def update_plot(gamma_idx, omega_idx):
+    row = df.loc[(gamma_idx, omega_idx)]
     
-    reals = df.iloc[:, 2::2]
-    imags = df.iloc[:, 3::2]
-
-    # Get absolute min/max across ALL rows and ALL eigenvalue columns
-    g_x_min, g_x_max = reals.min().min(), reals.max().max()
-    g_y_min, g_y_max = imags.min().min(), imags.max().max()
-
-    # Add 10% padding so points don't touch the border
-    pad_x = (g_x_max - g_x_min) * 0.1 if g_x_max != g_x_min else 1.0
-    pad_y = (g_y_max - g_y_min) * 0.1 if g_y_max != g_y_min else 1.0
-
-    fixed_limits = {
-        'x': [g_x_min - pad_x, g_x_max + pad_x],
-        'y': [g_y_min - pad_y, g_y_max + pad_y]
-    }
+    # Extract eigenvalues (gamma and omega are now in index, not in row.iloc)
+    real_parts = [row.iloc[2*i] for i in range(n_eigvals)]
+    imag_parts = [row.iloc[2*i+1] for i in range(n_eigvals)]
     
-    return df, fixed_limits
+    for r, i in zip(real_parts, imag_parts):
+        if r == gamma_vals[gamma_idx] and i == omega_vals[omega_idx]:
+            real_parts.remove(r)
+            imag_parts.remove(i)
 
-# Load Data & Limits
-try:
-    df, global_limits = load_and_prep_data()
-except Exception as e:
-    st.error(f"Error: {e}. Please ensure you ran the parquet conversion script.")
-    st.stop()
-
-# --- 2. CONTROLS (SLIDERS) ---
-st.sidebar.header("Parameters")
-
-# Gamma Slider
-unique_gammas = sorted(df.iloc[:, 0].unique())
-sel_gamma = st.sidebar.select_slider("Gamma (γ)", options=unique_gammas)
-
-# Omega Slider (Updates based on Gamma)
-available_omegas = sorted(df[df.iloc[:, 0] == sel_gamma].iloc[:, 1].unique())
-sel_omega = st.sidebar.select_slider("Omega (ω)", options=available_omegas)
-
-# --- 3. FILTER & PLOT ---
-# Get the specific row for these parameters
-row = df[(df.iloc[:, 0] == sel_gamma) & (df.iloc[:, 1] == sel_omega)]
-
-if not row.empty:
-    # Extract data (Skip first 2 cols)
-    data = row.iloc[0, 2:].values
-    current_reals = data[::2]
-    current_imags = data[1::2]
-
-    # Build Plot
-    fig = go.Figure()
     
-    fig.add_trace(go.Scatter(
-        x=current_reals, 
-        y=current_imags,
+    # real_parts.remove(gamma_vals[gamma_idx])
+    # imag_parts.remove(omega_vals[omega_idx])
+    
+    # print(real_parts.index(gamma_vals[gamma_idx]), imag_parts.index(omega_vals[omega_idx]))
+    
+    fig = go.Figure(data=go.Scattergl(
+        x=real_parts,
+        y=imag_parts,
         mode='markers',
-        marker=dict(size=8, color='royalblue', line=dict(width=1, color='black')),
-        name='Eigenvalues'
+        marker=dict(
+            size=8,
+            opacity=0.7,
+            line=dict(width=0.5, color='black')
+        )
     ))
-
-    # --- APPLY FIXED LIMITS ---
-    # This block forces the camera to stay still
+    
     fig.update_layout(
-        title=f"Spectrum at γ={sel_gamma:.4f}, ω={sel_omega:.4f}",
+        title = r'Lindbladian Spectrum: g={g:.4f}, $\Omega$={o:.4f}'.format(g=gamma_vals[gamma_idx],o=omega_vals[omega_idx]),
         xaxis=dict(
-            range=global_limits['x'],  # <--- LOCKED X RANGE
-            title="Real Part (Re)",
+            title='Re(λ)',
+            range=x_range,
+            showgrid=True,
             zeroline=True,
-            zerolinewidth=1,
+            zerolinewidth=2,
             zerolinecolor='black'
         ),
         yaxis=dict(
-            range=global_limits['y'],  # <--- LOCKED Y RANGE
-            title="Imaginary Part (Im)",
+            title='Im(λ)',
+            range=y_range,
+            showgrid=True,
             zeroline=True,
-            zerolinewidth=1,
-            zerolinecolor='black',
-            scaleanchor="x",           # Optional: Forces 1:1 aspect ratio
-            scaleratio=1
+            zerolinewidth=2,
+            zerolinecolor='black'
         ),
-        width=700,
-        height=700,
-        template="plotly_white"
+        height=600,
+        hovermode='closest',
+        transition={'duration': 0}  # No animation lag
     )
+    
+    return fig
 
-    st.plotly_chart(fig)
-else:
-    st.error("No data found for this combination.")
+if __name__ == '__main__':
+    app.run(debug=True, dev_tools_hot_reload=False, use_reloader=False)

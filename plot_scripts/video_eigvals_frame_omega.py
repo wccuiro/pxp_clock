@@ -4,7 +4,7 @@ import numpy as np
 
 # 1. Load your data
 # Structure assumed: [Gamma, Omega, E1, Occ1, E2, Occ2, ...]
-df = pd.read_csv('../rust/std_eigenvalues_8.csv', header=None)
+df = pd.read_csv('../rust/std_eigenvalues_10.csv', header=None)
 
 # 2. Setup Frames (Iterate over unique Omega values)
 unique_omegas = np.sort(df.iloc[:, 1].unique())

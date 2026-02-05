@@ -9,7 +9,7 @@ from matplotlib.widgets import Slider
 print("Loading data...")
 try:
     # Read the file (assuming no header)
-    df = pd.read_csv('../rust/std_eigenvalues_8.csv', header=None)
+    df = pd.read_csv('../rust/std_eigenvalues_10.csv', header=None)
 except FileNotFoundError:
     print("Error: 'std_eigenvalues_8.csv' not found. Please ensure the file is in the working directory.")
     exit()

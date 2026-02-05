@@ -1062,7 +1062,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             
             // println!("\nComputing eigenvalues...");
             // We capture 'eigenvectors' (removed the underscore _ so compiler knows we use it)
-
+            write!(file, "{},{},", g, omega)?;
             match l_cal_dense.eig() {
                 Ok((eigenvalues, eigenvectors)) => {
                     // println!("✓ Eigenvalues computed ({} values)\n", eigenvalues.len());
@@ -1077,7 +1077,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     
                     // 2. Iterate with enumerate to get the index 'i' directly
                     for (i, eval) in eigenvalues.iter().enumerate() {
-                        write!(file, "{},{},{},{}", g, omega, eval.re, eval.im)?;
+                        write!(file, "{},{}", eval.re, eval.im)?;
                         if i < eigenvalues.len() - 1 {
                             write!(file, ",")?;
                         }

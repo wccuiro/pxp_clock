@@ -13,7 +13,7 @@ MAX_G = 2.0      # Will plot g up to 2.0
 
 # 1. Load the data
 # ---------------------------------------------------------
-df = pd.read_csv('../rust/occupation_8.csv')
+df = pd.read_csv('../rust/occupation_10.csv')
 
 # --- FILTERING STEP ---
 # Keep only rows where omega and g are within your desired limits

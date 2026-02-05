@@ -1012,7 +1012,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ----------------------------------------------------------------
     // 1. SYSTEM SETUP (Single Threaded / Setup Phase)
     // ----------------------------------------------------------------
-    let l = 10;
+    let l = 8;
     let q_sector = 0;
     
     // --- Basis Construction ---
@@ -1075,8 +1075,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ----------------------------------------------------------------
     // 2. PARAMETER SWEEP PREPARATION
     // ----------------------------------------------------------------
-    let g_values = Array1::linspace(0.1, 2.0, 4);
-    let omega_values = Array1::linspace(0.0, 10.0, 4);
+    let g_values = Array1::linspace(0.1, 2.0, 20);
+    let omega_values = Array1::linspace(0.0, 5.0, 20);
 
     // Flatten parameters into a single vector of pairs (g, omega)
     let mut parameters = Vec::new();
