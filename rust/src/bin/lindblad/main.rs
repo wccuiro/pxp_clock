@@ -981,7 +981,8 @@ pub struct SpectralData {
 }
 
 pub fn analyze_lindbladian(
-    lindbladian: &Array2<Complex64>,
+    eigenvalues: &Array1<Complex64>,
+    eigenvectors: &Array2<Complex64>,
     rho: &Array1<Complex64>,
     tol: f64,
 ) -> Result<Vec<SpectralData>, Box<dyn Error>> {
@@ -989,7 +990,8 @@ pub fn analyze_lindbladian(
     // 1. Standard Eigen Decomposition
     // Note: For defective matrices, LAPACK returns "parallel" eigenvectors
     // for the Jordan chain. We detect this using SVD below.
-    let (evals, evecs) = lindbladian.eig()?;
+    let evals = eigenvalues;
+    let evecs = eigenvectors;
     
     // 2. Pair eigenvalues with indices and Sort by Real part (Decay Rate)
     let mut tagged_evals: Vec<(usize, Complex64)> = evals
@@ -1004,7 +1006,7 @@ pub fn analyze_lindbladian(
     });
 
     let mut results = Vec::new();
-    let n = lindbladian.nrows();
+    let n = evecs.nrows();
     let mut i = 0;
 
     // 3. Loop through eigenvalues and Cluster them
@@ -1085,7 +1087,7 @@ pub fn analyze_lindbladian(
 
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let l = 10;
+    let l = 8;
     let q_sector = 0;
     // let omega = 1.0;
     // let gamma_plus = 1.0;
@@ -1146,10 +1148,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     // println!("\nBuilding Lindbladian...");
     // let g_values = Array1::linspace(0.1, 2.0, 2);
-    let omega_values = Array1::linspace(0.0, 2.0, 50);
+    let omega_values = Array1::linspace(0.0, 2.0, 10);
 
 
-    let raw_space = Array1::linspace(0.5, 1.0, 10);
+    let raw_space = Array1::linspace(0.5, 1.0, 3);
     let lower_segment = raw_space.slice(s![..-1]);
     let mut result = lower_segment.to_vec(); // Convert to Vec
     result.push(1.0);                        // Add center
@@ -1204,20 +1206,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
             
 
-            let analysis = analyze_lindbladian(&l_cal_dense, &rho_vec_neel, 1e-6)?;
-            write!(file_decay, "{},{}", g, omega)?;
-
-            for data in &analysis {
-                write!(file_decay, ",{:.10}, {:.10}, {:.10}", data.real_eigenvalue, data.overlap, data.block_size)?;
-            }
-
-            writeln!(file_decay)?;
-
+            
+            
+            
             // println!("\nComputing eigenvalues...");
             // We capture 'eigenvectors' (removed the underscore _ so compiler knows we use it)
             write!(file, "{},{},", g, omega)?;
             match l_cal_dense.eig() {
                 Ok((eigenvalues, eigenvectors)) => {
+                    let analysis = analyze_lindbladian(&eigenvalues, &eigenvectors, &rho_vec_neel, 1e-6)?;
+                    
+                    write!(file_decay, "{},{}", g, omega)?;
+                    for data in &analysis {
+                        write!(file_decay, ",{:.10}, {:.10}, {:.10}", data.real_eigenvalue, data.overlap, data.block_size)?;
+                    }
+                    writeln!(file_decay)?;
+
                     // println!("✓ Eigenvalues computed ({} values)\n", eigenvalues.len());
                     
                     // 1. Pre-calculate the Occupation Matrix ONCE (outside the loop)
