@@ -1,5 +1,5 @@
-use ndarray::{Array1,Array2};
-use ndarray_linalg::{Eig, Eigh};
+use ndarray::{Array1,Array2,s};
+use ndarray_linalg::{Eig, Eigh, SVD};
 use num_complex::Complex64;
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
@@ -8,6 +8,8 @@ use std::fs::File;
 use std::io::Write;
 use sprs::{CsMat, TriMat};
 
+
+use std::error::Error;
 
 const THRESHOLD: f64 = 1e-10;
 
@@ -966,11 +968,124 @@ fn steady_state_properties(
     results
 }
 
-// Usage in main:
-// let expectation_value = compute_trace_of_vectorized(l, &basis_states, &aux_vec, q_sector);
+
+
+#[derive(Debug, Clone)]
+pub struct SpectralData {
+    pub real_eigenvalue: f64,
+    pub imag_eigenvalue: f64,
+    pub overlap: f64,
+    /// If the matrix is defective (Jordan block), this is the size of the block (>1).
+    /// If it is just a normal degeneracy, this remains 1.
+    pub block_size: usize, 
+}
+
+pub fn analyze_lindbladian(
+    lindbladian: &Array2<Complex64>,
+    rho: &Array1<Complex64>,
+    tol: f64,
+) -> Result<Vec<SpectralData>, Box<dyn Error>> {
+    
+    // 1. Standard Eigen Decomposition
+    // Note: For defective matrices, LAPACK returns "parallel" eigenvectors
+    // for the Jordan chain. We detect this using SVD below.
+    let (evals, evecs) = lindbladian.eig()?;
+    
+    // 2. Pair eigenvalues with indices and Sort by Real part (Decay Rate)
+    let mut tagged_evals: Vec<(usize, Complex64)> = evals
+        .iter()
+        .enumerate()
+        .map(|(i, &e)| (i, e))
+        .collect();
+
+    // Sort descending by real part (closest to 0 first)
+    tagged_evals.sort_by(|a, b| {
+        b.1.re.partial_cmp(&a.1.re).unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let mut results = Vec::new();
+    let n = lindbladian.nrows();
+    let mut i = 0;
+
+    // 3. Loop through eigenvalues and Cluster them
+    while i < tagged_evals.len() {
+        let current_val = tagged_evals[i].1;
+        let mut cluster_indices = vec![tagged_evals[i].0];
+        
+        // Find all subsequent eigenvalues that are within 'tol' distance
+        let mut j = i + 1;
+        while j < tagged_evals.len() {
+            if (tagged_evals[j].1 - current_val).norm() < tol {
+                cluster_indices.push(tagged_evals[j].0);
+                j += 1;
+            } else {
+                break;
+            }
+        }
+        
+        // m_a: Algebraic Multiplicity (How many eigenvalues are identical)
+        let m_a = cluster_indices.len();
+
+        // 4. Extract Eigenvectors for this cluster
+        // We create a matrix of shape (N x m_a)
+        let mut raw_subspace = Array2::<Complex64>::zeros((n, m_a));
+        for (col_idx, &eig_idx) in cluster_indices.iter().enumerate() {
+            let vec = evecs.column(eig_idx);
+            raw_subspace.column_mut(col_idx).assign(&vec);
+        }
+
+        // 5. The Jordan Test: Compute Rank via SVD
+        // We check if these m_a eigenvectors are linearly independent.
+        // If they are parallel (Jordan block), SVD will show fewer non-zero singular values.
+        let (_, sigma, _) = raw_subspace.svd(false, false)?;
+        
+        // Count non-zero singular values (Geometric Multiplicity, m_g)
+        // We use a robust tolerance for "zero"
+        let rank_tol = 1e-5; 
+        let m_g = sigma.iter().filter(|&&s| s > rank_tol).count();
+
+        // 6. Determine Effective Block Size
+        // If m_g < m_a, we are missing eigenvectors -> Jordan Block.
+        // If m_g == m_a, we have a full set -> Diagonalizable (Size = 1).
+        let effective_size = if m_g < m_a { m_a } else { 1 };
+
+        // 7. Compute Overlap (Projection onto the Range)
+        // We perform SVD again to get the U matrix (Orthonormal Basis)
+        // This is safe even if vectors are parallel.
+        let (u_opt, _, _) = raw_subspace.svd(true, false)?;
+        let u = u_opt.ok_or("SVD U calculation failed")?;
+        
+        let mut overlap_sq = 0.0;
+        // Only sum over the valid geometric dimensions (m_g)
+        // Any dimension beyond m_g is numerical noise.
+        for k in 0..m_g {
+            let u_k = u.column(k);
+            let dot = u_k.mapv(|x| x.conj()).dot(rho); // <u|rho>
+            overlap_sq += dot.norm_sqr();
+        }
+        let overlap = overlap_sq.sqrt();
+
+        // 8. Store Result
+        results.push(SpectralData {
+            real_eigenvalue: current_val.re,
+            imag_eigenvalue: current_val.im,
+            overlap,
+            block_size: effective_size,
+        });
+
+        // Advance the outer loop index past this cluster
+        i = j;
+    }
+
+    Ok(results)
+}
+
+
+
+
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let l = 12;
+    let l = 10;
     let q_sector = 0;
     // let omega = 1.0;
     // let gamma_plus = 1.0;
@@ -1030,8 +1145,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // println!("✓ Dissipation complete!");
     
     // println!("\nBuilding Lindbladian...");
-    let g_values = Array1::linspace(0.1, 2.0, 2);
-    let omega_values = Array1::linspace(0.0, 30.0, 1);
+    // let g_values = Array1::linspace(0.1, 2.0, 2);
+    let omega_values = Array1::linspace(0.0, 2.0, 50);
+
+
+    let raw_space = Array1::linspace(0.5, 1.0, 10);
+    let lower_segment = raw_space.slice(s![..-1]);
+    let mut result = lower_segment.to_vec(); // Convert to Vec
+    result.push(1.0);                        // Add center
+    for &g in lower_segment.iter().rev() {
+        result.push(1.0 / g);
+    }
+    let g_values = Array1::from(result);
+
+
+    // --- Initial State (Neel x Neel) ---
+    let neel_key: u64 = (4u64.pow(l as u32 / 2) - 1) / 3;
+    let mut rho_vec_neel = Array1::<Complex64>::zeros(basis_states.len());
+
+    if let Some(idx) = basis_states.iter().position(|s| 
+        s.states_a.contains(&neel_key) && s.states_b.contains(&neel_key)
+    ) {
+        rho_vec_neel[idx] = Complex64::new(1.0, 0.0);
+        println!("Vectorized |Neel>x|Neel> placed at index: {}", idx);
+    } else {
+        println!("Néel state not found. Check if the k-sector allows it.");
+    }
+
+
 
     let mut file_occupation = File::create("occupation.csv")?;
     writeln!(file_occupation, "n,nn,g,omega")?;
@@ -1043,6 +1184,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let corr_matrix = density_correlation_nnn(l, &basis_states, q_sector);
     
     let mut file = File::create("eigenvalues.csv")?;
+
+    let mut file_decay = File::create("decay.csv")?;
 
     for &g in &g_values {
         for &omega in &omega_values {
@@ -1060,6 +1203,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 dense
             };
             
+
+            let analysis = analyze_lindbladian(&l_cal_dense, &rho_vec_neel, 1e-6)?;
+            write!(file_decay, "{},{}", g, omega)?;
+
+            for data in &analysis {
+                write!(file_decay, ",{:.10}, {:.10}, {:.10}", data.real_eigenvalue, data.overlap, data.block_size)?;
+            }
+
+            writeln!(file_decay)?;
+
             // println!("\nComputing eigenvalues...");
             // We capture 'eigenvectors' (removed the underscore _ so compiler knows we use it)
             write!(file, "{},{},", g, omega)?;
