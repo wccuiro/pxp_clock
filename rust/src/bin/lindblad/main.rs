@@ -62,13 +62,13 @@ fn translationally_invariant_basis(l: usize) -> Basis {
     Basis { rep_states, rep_index }
 }
 
-fn normalization_factor(l: usize, states: &[u64], k: i64) -> f64 {
+fn normalization_factor(l: usize, states: &[u64], k: i64, phases: &[Complex64]) -> f64 {
     let mut norm2 = Complex64::new(0.0, 0.0);
     for j in 0..l {
         for i in 0..l {
             if states[j] == states[i] {
-                let phase = 2.0 * PI * (k as f64) * ((j as i64 - i as i64) as f64) / (l as f64);
-                norm2 += Complex64::new(0.0, phase).exp();
+                let idx = (k * j as i64 - k * i as i64).rem_euclid(l as i64);
+                norm2 += phases[idx as usize];
             }
         }
     }
@@ -87,6 +87,7 @@ fn inner_product(
     l: usize,
     norm_a: f64,
     norm_b: f64,
+    phases: &[Complex64],
 ) -> Complex64 {
     if norm_a == 0.0 || norm_b == 0.0 {
         return Complex64::new(0.0, 0.0);
@@ -96,8 +97,8 @@ fn inner_product(
     for i in 0..l {
         for j in 0..l {
             if a_in[i] == b_out[j] {
-                let phase = 2.0 * PI * ((k_out * j as i64 - k_in * i as i64) as f64) / (l as f64);
-                ip += Complex64::new(0.0, phase).exp();
+                let idx = (k_out * j as i64 - k_in * i as i64).rem_euclid(l as i64);
+                ip += phases[idx as usize];
             }
         }
     }
@@ -114,299 +115,6 @@ struct BasisState {
     norm_b: f64,
 }
 
-fn _build_hamiltonian_parallel(
-    l: usize,
-    basis_states: &[BasisState],
-    q_sector: i64,
-    omega: f64,
-) -> Array2<Complex64> {
-    let dim = basis_states.len();
-    let mut h_cal = Array2::<Complex64>::zeros((dim, dim));
-    
-    let rows: Vec<_> = (0..dim)
-        .into_par_iter()
-        .map(|j| {
-            let mut row = vec![Complex64::new(0.0, 0.0); dim];
-            
-            for i in 0..dim {
-                let state_in = &basis_states[i];
-                let state_out = &basis_states[j];
-                
-                for site in 0..l {
-                    let states_a_h_in: Vec<u64> = state_in.states_a
-                        .iter()
-                        .map(|&s| s ^ (1u64 << site))
-                        .collect();
-                    let states_b_h_in: Vec<u64> = state_in.states_b
-                        .iter()
-                        .map(|&s| s ^ (1u64 << site))
-                        .collect();
-                    
-                    let mut a_prod = Complex64::new(0.0, 0.0);
-                    for ii in 0..l {
-                        for jj in 0..l {
-                            let cond1 = states_a_h_in[ii] == state_out.states_a[jj];
-                            let cond2 = (states_a_h_in[ii] & (1u64 << ((site + l - 1) % l))) == 0;
-                            let cond3 = (states_a_h_in[ii] & (1u64 << ((site + 1) % l))) == 0;
-                            
-                            if cond1 && cond2 && cond3 {
-                                let phase = 2.0 * PI * ((state_out.k * jj as i64 - state_in.k * ii as i64) as f64) / (l as f64);
-                                a_prod += Complex64::new(0.0, phase).exp();
-                            }
-                        }
-                    }
-                    a_prod /= state_in.norm_a * state_out.norm_a;
-                    
-                    let mut b_prod = Complex64::new(0.0, 0.0);
-                    for ii in 0..l {
-                        for jj in 0..l {
-                            let cond1 = states_b_h_in[ii] == state_out.states_b[jj];
-                            let cond2 = (states_b_h_in[ii] & (1u64 << ((site + l - 1) % l))) == 0;
-                            let cond3 = (states_b_h_in[ii] & (1u64 << ((site + 1) % l))) == 0;
-                            
-                            if cond1 && cond2 && cond3 {
-                                let k_diff_out = state_out.k - q_sector;
-                                let k_diff_in = state_in.k - q_sector;
-                                let phase = 2.0 * PI * ((-k_diff_out * jj as i64 + k_diff_in * ii as i64) as f64) / (l as f64);
-                                b_prod += Complex64::new(0.0, phase).exp();
-                            }
-                        }
-                    }
-                    b_prod /= state_in.norm_b * state_out.norm_b;
-                    
-                    let inner_b = inner_product(
-                        &state_out.states_b,
-                        &state_in.states_b,
-                        state_out.k - q_sector,
-                        state_in.k - q_sector,
-                        l,
-                        state_out.norm_b,
-                        state_in.norm_b,
-                    );
-                    
-                    let inner_a = inner_product(
-                        &state_in.states_a,
-                        &state_out.states_a,
-                        state_in.k,
-                        state_out.k,
-                        l,
-                        state_in.norm_a,
-                        state_out.norm_a,
-                    );
-                    
-                    row[i] += Complex64::new(0.0, -omega) * (a_prod * inner_b - inner_a * b_prod);
-                }
-            }
-            row
-        })
-        .collect();
-    
-    for (j, row) in rows.into_iter().enumerate() {
-        for (i, val) in row.into_iter().enumerate() {
-            h_cal[[j, i]] = val;
-        }
-    }
-    
-    h_cal
-}
-
-fn _build_dissipation_parallel(
-    l: usize,
-    basis_states: &[BasisState],
-    q_sector: i64,
-    gamma_plus: f64,
-    gamma_minus: f64,
-) -> Array2<Complex64> {
-    let dim = basis_states.len();
-    let mut d_cal = Array2::<Complex64>::zeros((dim, dim));
-    
-    let rows: Vec<_> = (0..dim)
-        .into_par_iter()
-        .map(|j| {
-            let mut row = vec![Complex64::new(0.0, 0.0); dim];
-            
-            for i in 0..dim {
-                let state_in = &basis_states[i];
-                let state_out = &basis_states[j];
-                
-                let inner_b = inner_product(
-                    &state_out.states_b,
-                    &state_in.states_b,
-                    state_out.k - q_sector,
-                    state_in.k - q_sector,
-                    l,
-                    state_out.norm_b,
-                    state_in.norm_b,
-                );
-                
-                let inner_a = inner_product(
-                    &state_in.states_a,
-                    &state_out.states_a,
-                    state_in.k,
-                    state_out.k,
-                    l,
-                    state_in.norm_a,
-                    state_out.norm_a,
-                );
-                
-                for site in 0..l {
-                    let states_a_l_in: Vec<u64> = state_in.states_a
-                        .iter()
-                        .map(|&s| s ^ (1u64 << site))
-                        .collect();
-                    let states_b_l_out: Vec<u64> = state_out.states_b
-                        .iter()
-                        .map(|&s| s ^ (1u64 << site))
-                        .collect();
-                    
-                    // L_PLUS operators
-                    let mut a_plus = Complex64::new(0.0, 0.0);
-                    for ii in 0..l {
-                        for jj in 0..l {
-                            let c1 = states_a_l_in[ii] == state_out.states_a[jj];
-                            let c2 = (states_a_l_in[ii] & (1u64 << ((site + l - 1) % l))) == 0;
-                            let c3 = (states_a_l_in[ii] & (1u64 << ((site + 1) % l))) == 0;
-                            let c4 = (state_in.states_a[ii] & (1u64 << (site % l))) == 0;
-                            if c1 && c2 && c3 && c4 {
-                                let phase = 2.0 * PI * ((state_out.k * jj as i64 - state_in.k * ii as i64) as f64) / (l as f64);
-                                a_plus += Complex64::new(0.0, phase).exp();
-                            }
-                        }
-                    }
-                    a_plus /= state_in.norm_a * state_out.norm_a;
-                    
-                    let mut b_plus = Complex64::new(0.0, 0.0);
-                    for ii in 0..l {
-                        for jj in 0..l {
-                            let c1 = states_b_l_out[ii] == state_in.states_b[jj];
-                            let c2 = (states_b_l_out[ii] & (1u64 << ((site + l - 1) % l))) == 0;
-                            let c3 = (states_b_l_out[ii] & (1u64 << ((site + 1) % l))) == 0;
-                            let c4 = (states_b_l_out[ii] & (1u64 << (site % l))) == 0;
-                            if c1 && c2 && c3 && c4 {
-                                let k_diff_out = state_out.k - q_sector;
-                                let k_diff_in = state_in.k - q_sector;
-                                let phase = 2.0 * PI * ((-k_diff_out * ii as i64 + k_diff_in * jj as i64) as f64) / (l as f64);
-                                b_plus += Complex64::new(0.0, phase).exp();
-                            }
-                        }
-                    }
-                    b_plus /= state_in.norm_b * state_out.norm_b;
-                    
-                    let mut aa_plus = Complex64::new(0.0, 0.0);
-                    for ii in 0..l {
-                        for jj in 0..l {
-                            let c1 = state_in.states_a[ii] == state_out.states_a[jj];
-                            let c2 = (state_in.states_a[ii] & (1u64 << ((site + l - 1) % l))) == 0;
-                            let c3 = (state_in.states_a[ii] & (1u64 << ((site + 1) % l))) == 0;
-                            let c4 = (state_in.states_a[ii] & (1u64 << (site % l))) == 0;
-                            if c1 && c2 && c3 && c4 {
-                                let phase = 2.0 * PI * ((state_out.k * jj as i64 - state_in.k * ii as i64) as f64) / (l as f64);
-                                aa_plus += Complex64::new(0.0, phase).exp();
-                            }
-                        }
-                    }
-                    aa_plus /= state_in.norm_a * state_out.norm_a;
-                    
-                    let mut bb_plus = Complex64::new(0.0, 0.0);
-                    for ii in 0..l {
-                        for jj in 0..l {
-                            let c1 = state_out.states_b[ii] == state_in.states_b[jj];
-                            let c2 = (state_out.states_b[ii] & (1u64 << ((site + l - 1) % l))) == 0;
-                            let c3 = (state_out.states_b[ii] & (1u64 << ((site + 1) % l))) == 0;
-                            let c4 = (state_out.states_b[ii] & (1u64 << (site % l))) == 0;
-                            if c1 && c2 && c3 && c4 {
-                                let k_diff_out = state_out.k - q_sector;
-                                let k_diff_in = state_in.k - q_sector;
-                                let phase = 2.0 * PI * ((-k_diff_out * ii as i64 + k_diff_in * jj as i64) as f64) / (l as f64);
-                                bb_plus += Complex64::new(0.0, phase).exp();
-                            }
-                        }
-                    }
-                    bb_plus /= state_in.norm_b * state_out.norm_b;
-                    
-                    row[i] += gamma_plus * (a_plus * b_plus - 0.5 * aa_plus * inner_b - 0.5 * inner_a * bb_plus);
-                    
-                    // L_MINUS operators
-                    let mut a_minus = Complex64::new(0.0, 0.0);
-                    for ii in 0..l {
-                        for jj in 0..l {
-                            let c1 = states_a_l_in[ii] == state_out.states_a[jj];
-                            let c2 = (states_a_l_in[ii] & (1u64 << ((site + l - 1) % l))) == 0;
-                            let c3 = (states_a_l_in[ii] & (1u64 << ((site + 1) % l))) == 0;
-                            let c4 = (states_a_l_in[ii] & (1u64 << (site % l))) == 0;
-                            if c1 && c2 && c3 && c4 {
-                                let phase = 2.0 * PI * ((state_out.k * jj as i64 - state_in.k * ii as i64) as f64) / (l as f64);
-                                a_minus += Complex64::new(0.0, phase).exp();
-                            }
-                        }
-                    }
-                    a_minus /= state_in.norm_a * state_out.norm_a;
-                    
-                    let mut b_minus = Complex64::new(0.0, 0.0);
-                    for ii in 0..l {
-                        for jj in 0..l {
-                            let c1 = states_b_l_out[ii] == state_in.states_b[jj];
-                            let c2 = (states_b_l_out[ii] & (1u64 << ((site + l - 1) % l))) == 0;
-                            let c3 = (states_b_l_out[ii] & (1u64 << ((site + 1) % l))) == 0;
-                            let c4 = (state_out.states_b[ii] & (1u64 << (site % l))) == 0;
-                            if c1 && c2 && c3 && c4 {
-                                let k_diff_out = state_out.k - q_sector;
-                                let k_diff_in = state_in.k - q_sector;
-                                let phase = 2.0 * PI * ((-k_diff_out * ii as i64 + k_diff_in * jj as i64) as f64) / (l as f64);
-                                b_minus += Complex64::new(0.0, phase).exp();
-                            }
-                        }
-                    }
-                    b_minus /= state_in.norm_b * state_out.norm_b;
-                    
-                    let mut aa_minus = Complex64::new(0.0, 0.0);
-                    for ii in 0..l {
-                        for jj in 0..l {
-                            let c1 = state_in.states_a[ii] == state_out.states_a[jj];
-                            let c2 = (state_in.states_a[ii] & (1u64 << ((site + l - 1) % l))) == 0;
-                            let c3 = (state_in.states_a[ii] & (1u64 << ((site + 1) % l))) == 0;
-                            let c4 = (states_a_l_in[ii] & (1 << (site % l))) == 0;
-                            if c1 && c2 && c3 && c4 {
-                                let phase = 2.0 * PI * ((state_out.k * jj as i64 - state_in.k * ii as i64) as f64) / (l as f64);
-                                aa_minus += Complex64::new(0.0, phase).exp();
-                            }
-                        }
-                    }
-                    aa_minus /= state_in.norm_a * state_out.norm_a;
-                    
-                    let mut bb_minus = Complex64::new(0.0, 0.0);
-                    for ii in 0..l {
-                        for jj in 0..l {
-                            let c1 = state_out.states_b[ii] == state_in.states_b[jj];
-                            let c2 = (state_out.states_b[ii] & (1u64 << ((site + l - 1) % l))) == 0;
-                            let c3 = (state_out.states_b[ii] & (1u64 << ((site + 1) % l))) == 0;
-                            let c4 = (states_b_l_out[ii] & (1u64 << (site % l))) == 0;
-                            if c1 && c2 && c3 && c4 {
-                                let k_diff_out = state_out.k - q_sector;
-                                let k_diff_in = state_in.k - q_sector;
-                                let phase = 2.0 * PI * ((-k_diff_out * ii as i64 + k_diff_in * jj as i64) as f64) / (l as f64);
-                                bb_minus += Complex64::new(0.0, phase).exp();
-                            }
-                        }
-                    }
-                    bb_minus /= state_in.norm_b * state_out.norm_b;
-                    
-                    row[i] += gamma_minus * (a_minus * b_minus - 0.5 * aa_minus * inner_b - 0.5 * inner_a * bb_minus);
-                }
-            }
-            row
-        })
-        .collect();
-    
-    for (j, row) in rows.into_iter().enumerate() {
-        for (i, val) in row.into_iter().enumerate() {
-            d_cal[[j, i]] = val;
-        }
-    }
-    
-    d_cal
-}
-
 
 fn build_lindbladian(
     l: usize,
@@ -415,6 +123,7 @@ fn build_lindbladian(
     omega: f64,
     gamma_plus: f64,
     gamma_minus: f64,
+    phases: &[Complex64],
 ) -> CsMat<Complex64> {
     let dim = basis_states.len();
     
@@ -449,6 +158,7 @@ fn build_lindbladian(
                     l,
                     state_out.norm_b,
                     state_in.norm_b,
+                    phases,
                 );
                 
                 let inner_a = inner_product(
@@ -459,6 +169,7 @@ fn build_lindbladian(
                     l,
                     state_in.norm_a,
                     state_out.norm_a,
+                    phases,
                 );
 
                 for site in 0..l {
@@ -496,8 +207,8 @@ fn build_lindbladian(
                             let c3 = (states_a_in_shifted[ii] & (1u64 << ((site + 1) % l))) == 0;
                             
                             if c1 && c2 && c3 {
-                                let phase = 2.0 * PI * ((state_out.k * jj as i64 - state_in.k * ii as i64) as f64) / (l as f64);
-                                a_prod += Complex64::new(0.0, phase).exp();
+                                let idx = (state_out.k * jj as i64 - state_in.k * ii as i64).rem_euclid(l as i64);
+                                a_prod += phases[idx as usize];
                             }
                         }
                     }
@@ -513,8 +224,9 @@ fn build_lindbladian(
                             if c1 && c2 && c3 {
                                 let k_diff_out = state_out.k - q_sector;
                                 let k_diff_in = state_in.k - q_sector;
-                                let phase = 2.0 * PI * ((-k_diff_out * jj as i64 + k_diff_in * ii as i64) as f64) / (l as f64);
-                                b_prod += Complex64::new(0.0, phase).exp();
+                                // let phase = 2.0 * PI * ((-k_diff_out * jj as i64 + k_diff_in * ii as i64) as f64) / (l as f64);
+                                let idx = (-k_diff_out * jj as i64 + k_diff_in * ii as i64).rem_euclid(l as i64);
+                                b_prod += phases[idx as usize];
                             }
                         }
                     }
@@ -533,8 +245,8 @@ fn build_lindbladian(
                             let c3 = (states_a_in_shifted[ii] & (1u64 << ((site + 1) % l))) == 0;
                             let c4 = (state_in.states_a[ii] & (1u64 << (site % l))) == 0;
                             if c1 && c2 && c3 && c4 {
-                                let phase = 2.0 * PI * ((state_out.k * jj as i64 - state_in.k * ii as i64) as f64) / (l as f64);
-                                a_plus += Complex64::new(0.0, phase).exp();
+                                let idx = (state_out.k * jj as i64 - state_in.k * ii as i64).rem_euclid(l as i64);
+                                a_plus += phases[idx as usize];
                             }
                         }
                     }
@@ -550,8 +262,8 @@ fn build_lindbladian(
                             if c1 && c2 && c3 && c4 {
                                 let k_diff_out = state_out.k - q_sector;
                                 let k_diff_in = state_in.k - q_sector;
-                                let phase = 2.0 * PI * ((-k_diff_out * ii as i64 + k_diff_in * jj as i64) as f64) / (l as f64);
-                                b_plus += Complex64::new(0.0, phase).exp();
+                                let idx = (-k_diff_out * ii as i64 + k_diff_in * jj as i64).rem_euclid(l as i64);
+                                b_plus += phases[idx as usize];
                             }
                         }
                     }
@@ -565,8 +277,8 @@ fn build_lindbladian(
                             let c3 = (state_in.states_a[ii] & (1u64 << ((site + 1) % l))) == 0;
                             let c4 = (state_in.states_a[ii] & (1u64 << (site % l))) == 0;
                             if c1 && c2 && c3 && c4 {
-                                let phase = 2.0 * PI * ((state_out.k * jj as i64 - state_in.k * ii as i64) as f64) / (l as f64);
-                                aa_plus += Complex64::new(0.0, phase).exp();
+                                let idx = (state_out.k * jj as i64 - state_in.k * ii as i64).rem_euclid(l as i64);
+                                aa_plus += phases[idx as usize];
                             }
                         }
                     }
@@ -582,8 +294,8 @@ fn build_lindbladian(
                             if c1 && c2 && c3 && c4 {
                                 let k_diff_out = state_out.k - q_sector;
                                 let k_diff_in = state_in.k - q_sector;
-                                let phase = 2.0 * PI * ((-k_diff_out * ii as i64 + k_diff_in * jj as i64) as f64) / (l as f64);
-                                bb_plus += Complex64::new(0.0, phase).exp();
+                                let idx = (-k_diff_out * ii as i64 + k_diff_in * jj as i64).rem_euclid(l as i64);
+                                bb_plus += phases[idx as usize];
                             }
                         }
                     }
@@ -602,8 +314,8 @@ fn build_lindbladian(
                             let c3 = (states_a_in_shifted[ii] & (1u64 << ((site + 1) % l))) == 0;
                             let c4 = (states_a_in_shifted[ii] & (1u64 << (site % l))) == 0;
                             if c1 && c2 && c3 && c4 {
-                                let phase = 2.0 * PI * ((state_out.k * jj as i64 - state_in.k * ii as i64) as f64) / (l as f64);
-                                a_minus += Complex64::new(0.0, phase).exp();
+                                let idx = (state_out.k * jj as i64 - state_in.k * ii as i64).rem_euclid(l as i64);
+                                a_minus += phases[idx as usize];
                             }
                         }
                     }
@@ -619,8 +331,8 @@ fn build_lindbladian(
                             if c1 && c2 && c3 && c4 {
                                 let k_diff_out = state_out.k - q_sector;
                                 let k_diff_in = state_in.k - q_sector;
-                                let phase = 2.0 * PI * ((-k_diff_out * ii as i64 + k_diff_in * jj as i64) as f64) / (l as f64);
-                                b_minus += Complex64::new(0.0, phase).exp();
+                                let idx = (-k_diff_out * ii as i64 + k_diff_in * jj as i64).rem_euclid(l as i64);
+                                b_minus += phases[idx as usize];
                             }
                         }
                     }
@@ -634,8 +346,8 @@ fn build_lindbladian(
                             let c3 = (state_in.states_a[ii] & (1u64 << ((site + 1) % l))) == 0;
                             let c4 = (states_a_in_shifted[ii] & (1 << (site % l))) == 0;
                             if c1 && c2 && c3 && c4 {
-                                let phase = 2.0 * PI * ((state_out.k * jj as i64 - state_in.k * ii as i64) as f64) / (l as f64);
-                                aa_minus += Complex64::new(0.0, phase).exp();
+                                let idx = (state_out.k * jj as i64 - state_in.k * ii as i64).rem_euclid(l as i64);
+                                aa_minus += phases[idx as usize];
                             }
                         }
                     }
@@ -651,8 +363,8 @@ fn build_lindbladian(
                             if c1 && c2 && c3 && c4 {
                                 let k_diff_out = state_out.k - q_sector;
                                 let k_diff_in = state_in.k - q_sector;
-                                let phase = 2.0 * PI * ((-k_diff_out * ii as i64 + k_diff_in * jj as i64) as f64) / (l as f64);
-                                bb_minus += Complex64::new(0.0, phase).exp();
+                                let idx = (-k_diff_out * ii as i64 + k_diff_in * jj as i64).rem_euclid(l as i64);
+                                bb_minus += phases[idx as usize];
                             }
                         }
                     }
@@ -685,6 +397,7 @@ fn occupation_number(
     l: usize,
     basis_states: &[BasisState],
     q_sector: i64,
+    phases: &[Complex64],
 ) -> Array2<Complex64> {
     let dim = basis_states.len();
     let mut n_cal = Array2::<Complex64>::zeros((dim, dim));
@@ -708,6 +421,7 @@ fn occupation_number(
                     l,
                     state_out.norm_b,
                     state_in.norm_b,
+                    phases,
                 );
                 
                 // Optimization: If B-states are orthogonal, the whole term is 0.
@@ -731,8 +445,8 @@ fn occupation_number(
                             let c_occ = (state_in.states_a[ii] & (1u64 << (site % l))) != 0;
                             
                             if c1 && c_occ {
-                                let phase = 2.0 * PI * ((state_out.k * jj as i64 - state_in.k * ii as i64) as f64) / (l as f64);
-                                a_prod += Complex64::new(0.0, phase).exp();
+                                let idx = (state_out.k * jj as i64 - state_in.k * ii as i64).rem_euclid(l as i64);
+                                a_prod += phases[idx as usize];
                             }
                         }
                     }
@@ -759,6 +473,7 @@ fn density_correlation_nnn(
     l: usize,
     basis_states: &[BasisState],
     q_sector: i64,
+    phases: &[Complex64],
 ) -> Array2<Complex64> {
     let dim = basis_states.len();
     let mut corr_cal = Array2::<Complex64>::zeros((dim, dim));
@@ -781,6 +496,7 @@ fn density_correlation_nnn(
                     l,
                     state_out.norm_b,
                     state_in.norm_b,
+                    phases,
                 );
                 
                 if inner_b.norm() <= THRESHOLD {
@@ -813,8 +529,8 @@ fn density_correlation_nnn(
                             let c_corr = (state_in.states_a[ii] & mask) == mask;
                             
                             if c1 && c_corr {
-                                let phase = 2.0 * PI * ((state_out.k * jj as i64 - state_in.k * ii as i64) as f64) / (l as f64);
-                                a_prod += Complex64::new(0.0, phase).exp();
+                                let idx = (state_out.k * jj as i64 - state_in.k * ii as i64).rem_euclid(l as i64);
+                                a_prod += phases[idx as usize];
                             }
                         }
                     }
@@ -843,6 +559,7 @@ fn compute_trace(
     basis_states: &[BasisState],
     vectorized_op: &Array1<Complex64>, // This is your aux_vec
     q_sector: i64,
+    phases: &[Complex64],
 ) -> Complex64 {
     // If Q != 0, trace is 0
     if q_sector != 0 {
@@ -869,6 +586,7 @@ fn compute_trace(
                 l,
                 state.norm_a,
                 state.norm_b,
+                phases,
             );
 
             coeff * overlap
@@ -1083,11 +801,17 @@ pub fn analyze_lindbladian(
 }
 
 
+fn precompute_phases(l: usize) -> Vec<Complex64> {
+    (0..l).map(|k| {
+        let phase = 2.0 * PI * (k as f64) / (l as f64);
+        Complex64::new(0.0, phase).exp()
+    }).collect()
+}
 
 
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let l = 8;
+    let l = 12;
     let q_sector = 0;
     // let omega = 1.0;
     // let gamma_plus = 1.0;
@@ -1100,12 +824,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     let basis = translationally_invariant_basis(l);
     // println!("Representative states: {}", basis.rep_states.len());
+    let phases = precompute_phases(l);
     
     let mut basis_per_sector: HashMap<i64, Vec<u64>> = HashMap::new();
     for k_sector in 0..l as i64 {
         for &state in &basis.rep_states {
             if let Some(translations) = basis.rep_index.get(&state) {
-                let norm = normalization_factor(l, translations, k_sector);
+                let norm = normalization_factor(l, translations, k_sector, &phases);
                 if norm > 0.0 {
                     basis_per_sector.entry(k_sector).or_insert_with(Vec::new).push(state);
                 }
@@ -1120,8 +845,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 for &state_b in states_in_sector {
                     let states_a = basis.rep_index.get(&state_a).unwrap().clone();
                     let states_b = basis.rep_index.get(&state_b).unwrap().clone();
-                    let norm_a = normalization_factor(l, &states_a, k);
-                    let norm_b = normalization_factor(l, &states_b, k);
+                    let norm_a = normalization_factor(l, &states_a, k, &phases);
+                    let norm_b = normalization_factor(l, &states_b, k, &phases);
                     
                     basis_states.push(BasisState {
                         states_a,
@@ -1134,6 +859,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
+
     
     // let dimension = basis_states.len();
     // println!("Total dimension: {}\n", dimension);
@@ -1182,8 +908,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut file_std_eigenvalues = File::create("std_eigenvalues.csv")?;
     // writeln!(file_std_eigenvalues, "g,omega,")?;
 
-    let n_matrix = occupation_number(l, &basis_states, q_sector);
-    let corr_matrix = density_correlation_nnn(l, &basis_states, q_sector);
+    let n_matrix = occupation_number(l, &basis_states, q_sector, &phases);
+    let corr_matrix = density_correlation_nnn(l, &basis_states, q_sector, &phases);
     
     let mut file = File::create("eigenvalues.csv")?;
 
@@ -1193,7 +919,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         for &omega in &omega_values {
             let gamma_minus = 1.0;
             let gamma_plus = g * gamma_minus;
-            let l_cal = build_lindbladian(l, &basis_states, q_sector, omega, gamma_plus, gamma_minus);
+            let l_cal = build_lindbladian(l, &basis_states, q_sector, omega, gamma_plus, gamma_minus, &phases);
             // let l_cal = h_cal + d_cal;
             // println!("✓ Lindbladian complete!");
 
@@ -1262,7 +988,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                             // B. Compute Normalization Factor Z = Tr[rho]
                             //    using the 'compute_trace' function we defined earlier
-                            let tr_rho = compute_trace(l, &basis_states, &rho_vec, q_sector);
+                            let tr_rho = compute_trace(l, &basis_states, &rho_vec, q_sector, &phases);
                             // println!("Trace (Normalization factor): {:.6} + {:.6}i", tr_rho.re, tr_rho.im);
 
                             // C. Compute <n> = Tr[n * rho]
@@ -1270,8 +996,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let n_rho_vec = n_matrix.dot(&rho_vec);
                             let nn_rho_vec = corr_matrix.dot(&rho_vec);
                             //    Then take the trace of that resulting vector
-                            let tr_n_rho = compute_trace(l, &basis_states, &n_rho_vec, q_sector);
-                            let tr_nn_rho = compute_trace(l, &basis_states, &nn_rho_vec, q_sector);
+                            let tr_n_rho = compute_trace(l, &basis_states, &n_rho_vec, q_sector, &phases);
+                            let tr_nn_rho = compute_trace(l, &basis_states, &nn_rho_vec, q_sector, &phases);
                             
                             // D. Physical Expectation Value: <n> = Tr[n rho] / Tr[rho]
                             if tr_rho.norm() > 1e-10 {
