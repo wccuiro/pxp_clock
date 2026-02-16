@@ -138,7 +138,7 @@ fn build_lindbladian(
     //     .enumerate()
     //     .for_each(|(j, row_slice)| {
     let triplets: Vec<(usize, usize, Complex64)> = (0..dim)
-        .into_par_iter()
+        .into_iter()
         .flat_map(|j| {
             let mut local_triplets = Vec::new();
 
@@ -403,7 +403,7 @@ fn occupation_number(
     let mut n_cal = Array2::<Complex64>::zeros((dim, dim));
     
     let rows: Vec<_> = (0..dim)
-        .into_par_iter()
+        .into_iter()
         .map(|j| {
             let mut row = vec![Complex64::new(0.0, 0.0); dim];
             
@@ -479,7 +479,7 @@ fn density_correlation_nnn(
     let mut corr_cal = Array2::<Complex64>::zeros((dim, dim));
     
     let rows: Vec<_> = (0..dim)
-        .into_par_iter()
+        .into_iter()
         .map(|j| {
             let mut row = vec![Complex64::new(0.0, 0.0); dim];
             
@@ -808,22 +808,19 @@ fn precompute_phases(l: usize) -> Vec<Complex64> {
     }).collect()
 }
 
-
+struct SimulationResult {
+    // We store the ready-to-write strings here
+    occupation_str: String,
+    std_eigenvalues_str: String,
+    eigenvalues_str: String,
+    decay_str: String,
+}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let l = 12;
+    let l = 8;
     let q_sector = 0;
-    // let omega = 1.0;
-    // let gamma_plus = 1.0;
-    // let gamma_minus = 1.0;
-    
-    // println!("=== Lindbladian Solver ===");
-    // println!("L = {}, Q_sector = {}", l, q_sector);
-    // println!("Omega = {}, γ+ = {}, γ- = {}", omega, gamma_plus, gamma_minus);
-    // println!("\nGenerating basis...");
     
     let basis = translationally_invariant_basis(l);
-    // println!("Representative states: {}", basis.rep_states.len());
     let phases = precompute_phases(l);
     
     let mut basis_per_sector: HashMap<i64, Vec<u64>> = HashMap::new();
@@ -860,22 +857,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    println!("Total basis states in Q=0 sector: {}", basis_states.len());
     
-    // let dimension = basis_states.len();
-    // println!("Total dimension: {}\n", dimension);
-    
-    // println!("Building Hamiltonian matrix...");
-    // let h_cal = build_hamiltonian_parallel(l, &basis_states, q_sector, omega);
-    // println!("✓ Hamiltonian complete!");
-    
-    // println!("\nBuilding Dissipation matrix...");
-    // let d_cal = build_dissipation_parallel(l, &basis_states, q_sector, gamma_plus, gamma_minus);
-    // println!("✓ Dissipation complete!");
-    
-    // println!("\nBuilding Lindbladian...");
     // let g_values = Array1::linspace(0.1, 2.0, 2);
     let omega_values = Array1::linspace(0.0, 2.0, 10);
-
 
     let raw_space = Array1::linspace(0.5, 1.0, 3);
     let lower_segment = raw_space.slice(s![..-1]);
@@ -885,6 +870,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         result.push(1.0 / g);
     }
     let g_values = Array1::from(result);
+
+    let mut parameters = Vec::new();
+    for &g in &g_values {
+        for &omega in &omega_values {
+            parameters.push((g, omega));
+        }
+    }
 
 
     // --- Initial State (Neel x Neel) ---
@@ -900,28 +892,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("Néel state not found. Check if the k-sector allows it.");
     }
 
-
-
-    let mut file_occupation = File::create("occupation.csv")?;
-    writeln!(file_occupation, "n,nn,g,omega")?;
-
-    let mut file_std_eigenvalues = File::create("std_eigenvalues.csv")?;
-    // writeln!(file_std_eigenvalues, "g,omega,")?;
-
     let n_matrix = occupation_number(l, &basis_states, q_sector, &phases);
     let corr_matrix = density_correlation_nnn(l, &basis_states, q_sector, &phases);
-    
-    let mut file = File::create("eigenvalues.csv")?;
 
-    let mut file_decay = File::create("decay.csv")?;
 
-    for &g in &g_values {
-        for &omega in &omega_values {
+    println!("Starting parallel sweep over {} points...", parameters.len());
+
+    // 1. RUN PARALLEL SIMULATIONS
+    let results: Vec<SimulationResult> = parameters
+        .par_iter()
+        .map(|&(g, omega)| {
+            // A. Setup Buffers for Output
+            let mut res = SimulationResult {
+                occupation_str: String::new(),
+                std_eigenvalues_str: String::new(),
+                eigenvalues_str: String::new(),
+                decay_str: String::new(),
+            };
+
+            // B. Build Matrix (Directly Dense)
+            // Allocates ~2.2GB for L=12
+
             let gamma_minus = 1.0;
             let gamma_plus = g * gamma_minus;
+            // let mut l_mat = Array2::<Complex64>::zeros((basis_states.len(), basis_states.len()));
+            
+            // // Call the SERIAL builder
+            // build_lindbladian_serial(l, &basis_states, &mut l_mat, q_sector, omega, gamma_plus, gamma_minus, &phases);
+
             let l_cal = build_lindbladian(l, &basis_states, q_sector, omega, gamma_plus, gamma_minus, &phases);
-            // let l_cal = h_cal + d_cal;
-            // println!("✓ Lindbladian complete!");
 
             let l_cal_dense = {
                 let mut dense = Array2::<Complex64>::zeros((basis_states.len(), basis_states.len()));
@@ -930,103 +929,76 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 dense
             };
-            
 
-            
-            
-            
-            // println!("\nComputing eigenvalues...");
-            // We capture 'eigenvectors' (removed the underscore _ so compiler knows we use it)
-            write!(file, "{},{},", g, omega)?;
-            match l_cal_dense.eig() {
-                Ok((eigenvalues, eigenvectors)) => {
-                    let analysis = analyze_lindbladian(&eigenvalues, &eigenvectors, &rho_vec_neel, 1e-6)?;
-                    
-                    write!(file_decay, "{},{}", g, omega)?;
-                    for data in &analysis {
-                        write!(file_decay, ",{:.10}, {:.10}, {:.10}", data.real_eigenvalue, data.overlap, data.block_size)?;
+            // C. Diagonalize
+            if let Ok((evals, evecs)) = l_cal_dense.eig() {
+                
+                // --- 1. Decay Analysis ---
+                if let Ok(analysis) = analyze_lindbladian(&evals, &evecs, &rho_vec_neel, 1e-6) {
+                    res.decay_str.push_str(&format!("{},{}", g, omega)); 
+                    for data in analysis {
+                        res.decay_str.push_str(&format!(",{:.10},{:.10},{}", 
+                            data.real_eigenvalue, data.overlap, data.block_size));
                     }
-                    writeln!(file_decay)?;
+                    res.decay_str.push('\n');
+                }                
 
-                    // println!("✓ Eigenvalues computed ({} values)\n", eigenvalues.len());
-                    
-                    // 1. Pre-calculate the Occupation Matrix ONCE (outside the loop)
-                    //    This saves massive time so we don't rebuild it if we find multiple steady states.
-                    // println!("Building observable matrices...");
-
-
-                    // writeln!(file, "real,imaginary")?;
-
-                    
-                    // 2. Iterate with enumerate to get the index 'i' directly
-                    for (i, eval) in eigenvalues.iter().enumerate() {
-                        write!(file, "{},{}", eval.re, eval.im)?;
-                        if i < eigenvalues.len() - 1 {
-                            write!(file, ",")?;
-                        }
-                        // Check for Steady State (Real part approx 0, Imag part approx 0)
-                        if eval.re.abs() < 1e-8 && eval.im.abs() < 1e-8 {
-                            // println!("\n--- Steady State Found (Index {}) ---", i);
-                            // println!("Eigenvalue: {:.10} + {:.10}i", eval.re, eval.im);
-
-                            // A. Extract the raw eigenvector (vectorized density matrix)
-                            //    We expect this to be a column vector
-                            let rho_vec = eigenvectors.column(i).to_owned();
-
-                            // Compute Spectrum and Occupations
-                            let spectrum_data = steady_state_properties(l, &basis_states, &rho_vec);
-
-                            // Format for CSV: "Prob1, Occ1, Prob2, Occ2, ..."
-                            // Using high precision for probabilities, standard for occupation
-                            let formatted_data = spectrum_data.iter()
-                                .map(|(p, n)| format!("{:.16}, {:.6}", p, n))
-                                .collect::<Vec<String>>()
-                                .join(", ");
-
-                            // Write: g, omega, list...
-                            writeln!(file_std_eigenvalues, "{},{},{}", g, omega, formatted_data)?;
-
-                            // B. Compute Normalization Factor Z = Tr[rho]
-                            //    using the 'compute_trace' function we defined earlier
-                            let tr_rho = compute_trace(l, &basis_states, &rho_vec, q_sector, &phases);
-                            // println!("Trace (Normalization factor): {:.6} + {:.6}i", tr_rho.re, tr_rho.im);
-
-                            // C. Compute <n> = Tr[n * rho]
-                            //    First multiply matrix @ vector
-                            let n_rho_vec = n_matrix.dot(&rho_vec);
-                            let nn_rho_vec = corr_matrix.dot(&rho_vec);
-                            //    Then take the trace of that resulting vector
-                            let tr_n_rho = compute_trace(l, &basis_states, &n_rho_vec, q_sector, &phases);
-                            let tr_nn_rho = compute_trace(l, &basis_states, &nn_rho_vec, q_sector, &phases);
-                            
-                            // D. Physical Expectation Value: <n> = Tr[n rho] / Tr[rho]
-                            if tr_rho.norm() > 1e-10 {
-                                let expectation_n = tr_n_rho / tr_rho;
-                                let expectation_nn = tr_nn_rho / tr_rho;
-                                // println!("{},{},{}", expectation_n.re, g, omega);
-                                writeln!(file_occupation, "{},{},{},{}", expectation_n.re, expectation_nn.re, g, omega)?;
-                            } else {
-                                // println!("Warning: Trace is zero, cannot normalize!");
-                            }
-                            // println!("-------------------------------------\n");
-                        }
-
-                        // writeln!(file, "{},{}", eval.re, eval.im)?;
-                    }
-                    writeln!(file)?;
-                    // println!("✓ Eigenvalues saved to eigenvalues.csv");
-                    
-                    // println!("\nFirst 10 eigenvalues:");
-                    // for (i, eval) in eigenvalues.iter().take(10).enumerate() {
-                    //     println!("  λ_{:<2} = {:>12.6} + {:>12.6}i", i, eval.re, eval.im);
-                    // }
+                // --- 2. Eigenvalues Dump ---
+                res.eigenvalues_str.push_str(&format!("{},{},", g, omega));
+                for (i, eval) in evals.iter().enumerate() {
+                    res.eigenvalues_str.push_str(&format!("{},{}", eval.re, eval.im));
+                    if i < evals.len() - 1 { res.eigenvalues_str.push(','); }
                 }
-                Err(e) => {
-                    eprintln!("Error: Eigenvalue computation failed: {:?}", e);
+                res.eigenvalues_str.push('\n');
+
+                // --- 3. Steady State Analysis ---
+                for (i, eval) in evals.iter().enumerate() {
+                    if eval.re.abs() < 1e-8 && eval.im.abs() < 1e-8 {
+                        let rho_vec = evecs.column(i).to_owned();
+
+                        // Std Eigenvalues
+                        let spectrum_data = steady_state_properties(l, &basis_states, &rho_vec);
+                        let formatted_data = spectrum_data.iter()
+                            .map(|(p, n)| format!("{:.16}, {:.6}", p, n))
+                            .collect::<Vec<String>>()
+                            .join(", ");
+                        res.std_eigenvalues_str.push_str(&format!("{},{},{}\n", g, omega, formatted_data));
+
+                        // Occupation
+                        let tr_rho = compute_trace(l, &basis_states, &rho_vec, q_sector, &phases);
+                        let n_rho = n_matrix.dot(&rho_vec);
+                        let nn_rho = corr_matrix.dot(&rho_vec); // Using corr_matrix from outer scope is fine (read-only)
+                        
+                        let tr_n = compute_trace(l, &basis_states, &n_rho, q_sector, &phases);
+                        let tr_nn = compute_trace(l, &basis_states, &nn_rho, q_sector, &phases);
+
+                        if tr_rho.norm() > 1e-10 {
+                            let exp_n = (tr_n / tr_rho).re;
+                            let exp_nn = (tr_nn / tr_rho).re;
+                            res.occupation_str.push_str(&format!("{},{},{},{}\n", exp_n, exp_nn, g, omega));
+                        }
+                    }
                 }
             }
-        }    
+            // l_mat is dropped here, freeing RAM
+            res
+        })
+        .collect();
+
+    // 2. WRITE TO FILES (After loop, safe and fast)
+    let mut file_occupation = File::create("occupation.csv")?;
+    writeln!(file_occupation, "n,nn,g,omega")?;
+    
+    let mut file_std = File::create("std_eigenvalues.csv")?;
+    let mut file_evals = File::create("eigenvalues.csv")?;
+    let mut file_decay = File::create("decay.csv")?;
+
+    for res in results {
+        file_occupation.write_all(res.occupation_str.as_bytes())?;
+        file_std.write_all(res.std_eigenvalues_str.as_bytes())?;
+        file_evals.write_all(res.eigenvalues_str.as_bytes())?;
+        file_decay.write_all(res.decay_str.as_bytes())?;
     }
-    // println!("\n=== Done! ===");
+
     Ok(())
 }

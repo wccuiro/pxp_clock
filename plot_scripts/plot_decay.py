@@ -153,5 +153,5 @@ def interactive_plot(df):
     plt.show()
 
 # Run
-df = load_data('../rust/decay.csv')
+df = load_data('../rust/decay_12.csv')
 interactive_plot(df)
