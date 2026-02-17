@@ -817,7 +817,7 @@ struct SimulationResult {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let l = 8;
+    let l = 10;
     let q_sector = 0;
     
     let basis = translationally_invariant_basis(l);
@@ -937,8 +937,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Ok(analysis) = analyze_lindbladian(&evals, &evecs, &rho_vec_neel, 1e-6) {
                     res.decay_str.push_str(&format!("{},{}", g, omega)); 
                     for data in analysis {
-                        res.decay_str.push_str(&format!(",{:.10},{:.10},{}", 
-                            data.real_eigenvalue, data.overlap, data.block_size));
+                        res.decay_str.push_str(&format!(",{:.10},{:.10},{:.10},{}", 
+                            data.real_eigenvalue, data.imag_eigenvalue, data.overlap, data.block_size));
                     }
                     res.decay_str.push('\n');
                 }                

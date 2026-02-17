@@ -19,18 +19,20 @@ def load_data(filename):
                     g = float(parts[0])
                     omega = float(parts[1])
                     raw_data = parts[2:]
-                    num_modes = len(raw_data) // 3
+                    num_modes = len(raw_data) // 4
                     for i in range(num_modes):
-                        idx = i * 3
+                        idx = i * 4
                         # Physics convention: Decay Rate = -Re(Eigenvalue)
-                        decay_rate = -float(raw_data[idx]) 
-                        overlap = float(raw_data[idx+1])
-                        size = int(float(raw_data[idx+2]))
+                        decay_rate = -float(raw_data[idx])
+                        energy_oscillation = abs(float(raw_data[idx+1]))
+                        overlap = float(raw_data[idx+2])
+                        size = int(float(raw_data[idx+3]))
                         
                         data_points.append({
                             'g': g, 
                             'omega': omega, 
-                            'decay_rate': decay_rate, 
+                            'decay_rate': decay_rate,
+                            'energy_oscillation': energy_oscillation,
                             'overlap': overlap, 
                             'size': size
                         })
@@ -60,7 +62,7 @@ def interactive_plot(df):
     ax.grid(True, which="both", ls="--", alpha=0.3)
     
     # Set fixed limits based on global data extrema
-    x_min, x_max = df['decay_rate'].min(), df['decay_rate'].max()
+    x_min, x_max = df['energy_oscillation'].min(), df['energy_oscillation'].max()
     y_min, y_max = df[df['overlap']>0]['overlap'].min(), df['overlap'].max()
     
     # Add padding to limits
@@ -94,7 +96,7 @@ def interactive_plot(df):
         # 3. Update Normal Modes
         normal = subset[subset['size'] == 1]
         if not normal.empty:
-            scat_normal.set_offsets(np.column_stack((normal['decay_rate'], normal['overlap'])))
+            scat_normal.set_offsets(np.column_stack((normal['energy_oscillation'], normal['overlap'])))
         else:
             scat_normal.set_offsets(np.zeros((0, 2)))
 
@@ -102,7 +104,7 @@ def interactive_plot(df):
         jordan = subset[subset['size'] > 1]
         if not jordan.empty:
             # Set positions
-            scat_jordan.set_offsets(np.column_stack((jordan['decay_rate'], jordan['overlap'])))
+            scat_jordan.set_offsets(np.column_stack((jordan['energy_oscillation'], jordan['overlap'])))
             
             # Dynamic Sizes: Size 2 = 200px, Size 3 = 400px...
             sizes = 100 * ((jordan['size']*0+1 )** 1.5) 
@@ -116,7 +118,7 @@ def interactive_plot(df):
             for _, row in jordan.iterrows():
                 # Place text slightly above the star
                 txt = ax.text(
-                    row['decay_rate'], 
+                    row['energy_oscillation'], 
                     row['overlap'] * 1.3, 
                     f"k={int(row['size'])}", 
                     fontsize=10, 
@@ -153,5 +155,5 @@ def interactive_plot(df):
     plt.show()
 
 # Run
-df = load_data('../rust/decay_12.csv')
+df = load_data('../rust/decay_12_merged.csv')
 interactive_plot(df)
