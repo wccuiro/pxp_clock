@@ -2,7 +2,7 @@ import matplotlib.pyplot as plt
 from matplotlib.widgets import Slider
 import numpy as np
 import pandas as pd
-import matplotlib.cm as cm
+from matplotlib import colormaps as cm
 import matplotlib.colors as mcolors
 
 # ---------------------------------------------------------
@@ -65,7 +65,7 @@ def interactive_plot(df):
     
     # Add padding to limits
     ax.set_xlim(x_min - 0.1*abs(x_min), x_max + 0.1*abs(x_max))
-    ax.set_ylim(y_min * 0.5, y_max * 5.0)
+    ax.set_ylim(y_min * 0.5, y_max * 1.5)
 
     # -- Plot Objects --
     # 1. Normal Modes (Size = 1) - Blue dots
@@ -105,7 +105,7 @@ def interactive_plot(df):
             scat_jordan.set_offsets(np.column_stack((jordan['decay_rate'], jordan['overlap'])))
             
             # Dynamic Sizes: Size 2 = 200px, Size 3 = 400px...
-            sizes = 100 * (jordan['size'] ** 1.5) 
+            sizes = 100 * ((jordan['size']*0+1 )** 1.5) 
             scat_jordan.set_sizes(sizes)
             
             # Dynamic Colors: Larger blocks = Darker Red
@@ -128,7 +128,7 @@ def interactive_plot(df):
         else:
             scat_jordan.set_offsets(np.zeros((0, 2)))
 
-        ax.set_title(f"Spectrum at g={target_g:.4f}, $\omega$={target_w:.4f}")
+        ax.set_title(r"Spectrum at g={target_g:.4f}, $\omega$={target_w:.4f}".format(target_g=target_g, target_w=target_w), fontsize=14)
         fig.canvas.draw_idle()
 
     # -- Sliders --
