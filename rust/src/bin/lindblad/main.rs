@@ -817,7 +817,7 @@ struct SimulationResult {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let l = 10;
+    let l = 8;
     let q_sector = 0;
     
     let basis = translationally_invariant_basis(l);
@@ -859,17 +859,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Total basis states in Q=0 sector: {}", basis_states.len());
     
-    // let g_values = Array1::linspace(0.1, 2.0, 2);
+    let g_values = Array1::linspace(0.0001, 2.0, 10);
     let omega_values = Array1::linspace(0.0, 2.0, 10);
 
-    let raw_space = Array1::linspace(0.5, 1.0, 3);
-    let lower_segment = raw_space.slice(s![..-1]);
-    let mut result = lower_segment.to_vec(); // Convert to Vec
-    result.push(1.0);                        // Add center
-    for &g in lower_segment.iter().rev() {
-        result.push(1.0 / g);
-    }
-    let g_values = Array1::from(result);
+    // let raw_space = Array1::linspace(0.5, 1.0, 3);
+    // let lower_segment = raw_space.slice(s![..-1]);
+    // let mut result = lower_segment.to_vec(); // Convert to Vec
+    // result.push(1.0);                        // Add center
+    // for &g in lower_segment.iter().rev() {
+    //     result.push(1.0 / g);
+    // }
+    // let g_values = Array1::from(result);
 
     let mut parameters = Vec::new();
     for &g in &g_values {

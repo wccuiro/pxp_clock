@@ -286,7 +286,7 @@ function run_evolution(rho_init, sites, H_solver, dt, t_total)
         # Note: We use ishermitian=false for Lindbladians
         rho = tdvp(H_solver, dt, rho;  
                    cutoff=1e-12,
-                   nsweeps=4,
+                   nsweeps=2,
                    updater_kwargs=(; ishermitian=false, tol=1e-12, krylovdim=10))
     end
     
@@ -305,7 +305,7 @@ function main()
     gamma_minus = 0.2          # Sraining strength
 
     dt = 0.1             # Time step
-    t_total = 10.0         # Final time
+    t_total = 5.0         # Final time
     output_file = "occupation_dynamics.txt"
 
     println("--- Simulating Dissipative OmegaPXP Model ---")
