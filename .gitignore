@@ -6,5 +6,6 @@
 *.csv
 *.lock
 *.parquet
+*.txt
 
 /rust/target

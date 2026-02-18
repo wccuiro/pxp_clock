@@ -83,16 +83,18 @@ function compute_average_occupation(rho, sites, trace_mps)
     total_occ = 0.0
     
     for j in 1:N
-        # Identify vectorized index for Ket site j
         k_idx = 2*j - 1
         
-        # Apply Occupation Operator (n_j) to rho
-        # We use 'noprime' because applying an Op adds a prime, 
-        # but trace_mps expects unprimed indices.
-        rho_n = apply(op("ProjUp", sites[k_idx]), rho; cutoff=1e-15)
-        rho_n = noprime(rho_n)
+        # Create a copy of rho to modify
+        rho_n = copy(rho)
         
-        # Contract with Identity <1| n rho >
+        # Get the occupation operator as an ITensor
+        n_op = op("ProjUp", sites[k_idx])
+        
+        # Apply by contracting with the j-th tensor
+        rho_n[k_idx] = noprime(n_op * rho[k_idx])
+        
+        # Contract with trace MPS
         val = inner(trace_mps, rho_n)
         total_occ += real(val)
     end
@@ -297,13 +299,13 @@ end
 
 function main()
     # A. Parameters
-    N = 10                # Physical sites
-    Omega = 0.5           # Rabi frequency
+    N = 20                # Physical sites
+    Omega = 2.0           # Rabi frequency
     gamma_plus = 0.2           # Pumping strength
     gamma_minus = 0.2          # Sraining strength
 
-    dt = 0.01             # Time step
-    t_total = 5.0         # Final time
+    dt = 0.1             # Time step
+    t_total = 10.0         # Final time
     output_file = "occupation_dynamics.txt"
 
     println("--- Simulating Dissipative OmegaPXP Model ---")
@@ -325,7 +327,7 @@ function main()
 
     # E. Run Evolution
     println("Starting Evolution...")
-    times, occs = run_evolution(rho_init, sites, 1.0im * H_solver, dt, t_total)
+    times, occs = run_evolution(rho_init, sites, H_solver, dt, t_total)
 
     # F. Save Results
     println("Saving results to $output_file...")
