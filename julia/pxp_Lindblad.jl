@@ -6,69 +6,15 @@ using Printf
 # 1. Helper Functions: Trace and Measurement
 # -----------------------------------------------------------------------------
 
-"""
-    create_trace_mps(sites)
-
-Creates the vectorized "Identity Bra" <<1|.
-This is a product state of maximally entangled pairs |s_k, s_b> such that s_k == s_b.
-Computing inner(trace_mps, rho) calculates the Trace of rho.
-"""
-function create_trace_mps(sites)
+function trace_mps(rho::MPS, sites)
     Nvec = length(sites)
-    M = MPS(sites)
-    
-    # We build the MPS from left to right.
-    # We need a link index between pairs (dim=1) 
-    # and a link index within pairs (dim=2, to carry the entanglement).
-    
-    l_left = nothing
-    
+    result = ITensor(1.0)
     for j in 1:2:Nvec
-        s_ket = sites[j]
-        s_bra = sites[j+1]
-        
-        # 1. Define Links
-        # Internal link (carries the trace correlation |00> + |11>)
-        l_inner = Index(2, "Link,Inner,$j")
-        # External link (connects to next pair, dummy dim=1)
-        l_right = (j < Nvec-1) ? Index(1, "Link,Outer,$j") : nothing
-        
-        # 2. Ket Tensor: T[l_left, s_ket, l_inner]
-        # It should be delta(s_ket, l_inner)
-        inds_k = isnothing(l_left) ? [s_ket, l_inner] : [l_left, s_ket, l_inner]
-        Tk = ITensor(inds_k)
-        
-        # Set Diagonal: |0>_k connects to |0>_inner, |1>_k connects to |1>_inner
-        for i in 1:dim(s_ket)
-            if isnothing(l_left)
-                Tk[s_ket=>i, l_inner=>i] = 1.0
-            else
-                Tk[l_left=>1, s_ket=>i, l_inner=>i] = 1.0
-            end
-        end
-        M[j] = Tk
-        
-        # 3. Bra Tensor: T[l_inner, s_bra, l_right]
-        # It should be delta(s_bra, l_inner)
-        inds_b = isnothing(l_right) ? [l_inner, s_bra] : [l_inner, s_bra, l_right]
-        Tb = ITensor(inds_b)
-        
-        for i in 1:dim(s_bra)
-            if isnothing(l_right)
-                Tb[l_inner=>i, s_bra=>i] = 1.0
-            else
-                Tb[l_inner=>i, s_bra=>i, l_right=>1] = 1.0
-            end
-        end
-        M[j+1] = Tb
-        
-        # Advance
-        l_left = l_right
+        delta_tensor = delta(sites[j], sites[j+1])
+        result = result * rho[j] * delta_tensor * rho[j+1]
     end
-    
-    return M
+    return scalar(result)
 end
-
 
 """
     compute_average_occupation(rho, sites, trace_mps)
@@ -77,7 +23,7 @@ Computes 1/N * sum_j < n_j >.
 It applies n_j (ProjUp) to the Ket site j, then contracts with the Trace MPS.
 This calculates Tr( (1/N sum n_j) * rho ).
 """
-function compute_average_occupation(rho, sites, trace_mps)
+function compute_average_occupation(rho, sites)
     Nvec = length(sites)
     N = div(Nvec, 2)
     total_occ = 0.0
@@ -95,7 +41,7 @@ function compute_average_occupation(rho, sites, trace_mps)
         rho_n[k_idx] = noprime(n_op * rho[k_idx])
         
         # Contract with trace MPS
-        val = inner(trace_mps, rho_n)
+        val = trace_mps(rho_n, sites)
         total_occ += real(val)
     end
     
@@ -257,8 +203,8 @@ Returns arrays of time points and average occupations.
 function run_evolution(rho_init, sites, H_solver, dt, t_total)
     rho = copy(rho_init)
     
-    # Pre-construct the trace operator
-    tr_mps = create_trace_mps(sites)
+    # # Pre-construct the trace operator
+    # tr_mps = create_trace_mps(sites)
     
     times = Float64[]
     occupations = Float64[]
@@ -267,14 +213,14 @@ function run_evolution(rho_init, sites, H_solver, dt, t_total)
     # We perform steps: Normalize -> Measure -> Evolve
     for t in 0:dt:t_total
         # 1. Normalize <1|rho> = 1
-        z = inner(tr_mps, rho)
+        z = trace_mps(rho, sites)
         # Avoid division by zero if dynamics are weird, though shouldn't happen
         if abs(z) > 1e-14
             rho /= z
         end
         
         # 2. Measure Average Occupation
-        avg_occ = compute_average_occupation(rho, sites, tr_mps)
+        avg_occ = compute_average_occupation(rho, sites)
         
         # Store results
         push!(times, t)
@@ -300,7 +246,7 @@ end
 function main()
     # A. Parameters
     N = 20                # Physical sites
-    Omega = 2.0           # Rabi frequency
+    Omega = 1.0           # Rabi frequency
     gamma_plus = 0.2           # Pumping strength
     gamma_minus = 0.2          # Sraining strength
 
