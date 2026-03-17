@@ -316,8 +316,10 @@ fn simulate_trajectory(
     // --- 3. Trackers ---
     let mut rng = rand::rng();
     let num_channels = 2 * l;
-    let mut p_accum: Vec<f64> = vec![1.0; num_channels]; 
-    let mut r_thresholds: Vec<f64> = (0..num_channels).map(|_| rng.random()).collect();
+    // let mut probs_sum: f64 = 0.0;
+    let mut p_accum: f64 = 1.0; 
+    let mut probs_arr: Vec<f64> = vec![0.0; num_channels]; // Accumulated jump probabilities for each channel
+    let mut r_threshold: f64 = rng.random();
 
     // --- 4. Storage ---
     let mut times = Vec::new();
@@ -368,29 +370,52 @@ fn simulate_trajectory(
             let weight = l_psi.mapv(|x| x.norm_sqr()).sum();
             let prob = weight * dt;
 
-            p_accum[k] *= 1.0 - prob;
+            probs_arr[k] = prob;
+        }
 
-            if r_thresholds[k] >= p_accum[k] {
-                // === JUMP EVENT (Always Recorded) ===
-                
-                // 1. Collapse Wavefunction
-                psi = l_psi.mapv(|x| x / weight.sqrt());
-                let norm = psi.mapv(|x| x.norm_sqr()).sum().sqrt();
-                psi.mapv_inplace(|x| x / norm);
+        let probs_sum: f64 = probs_arr.iter().sum();
 
-                // 2. Reset Trackers
-                r_thresholds[k] = rng.random();
-                p_accum[k] = 1.0;
+        p_accum *= 1.0 - probs_sum; // Update the no-jump probability
 
-                // 3. SAVE DATA (This is the jump recording)
-                times.push(current_time);
-                sz.push(magnetization(l, &psi, basis));
-                types.push(k); // Original Encoding (0..2L-1)
-                occ.push(occupation(l, &psi, basis));
+        if r_threshold >= p_accum {
+            // === JUMP EVENT (Always Recorded) ===
+            
+            // 1. Collapse Wavefunction
+            let r_channel: f64 = rng.random();
+            let target = probs_sum * r_channel;
+            let mut cumulative = 0.0;
+            let mut selected_i = 0;
 
-                jumped = true;
-                break; 
+            for (i, &prob) in probs_arr.iter().enumerate() {
+                cumulative += prob;
+                // As soon as the cumulative sum exceeds the target, we found the index
+                if target <= cumulative {
+                    selected_i = i;
+                    break;
+                }
             }
+
+            let selected_gamma = if selected_i % 2 == 0 { gamma_plus } else { gamma_minus };
+            let jump_op = build_jump_operator(l, basis, basis_dict, (selected_i/2) as usize , (selected_i%2) as u8, selected_gamma);
+
+            let l_psi = jump_op.dot(&psi);
+            let weight = l_psi.mapv(|x| x.norm_sqr()).sum();
+
+            psi = l_psi.mapv(|x| x / weight.sqrt());
+            let norm = psi.mapv(|x| x.norm_sqr()).sum().sqrt();
+            psi.mapv_inplace(|x| x / norm);
+
+            // 2. Reset Trackers
+            r_threshold = rng.random();
+            p_accum = 1.0;
+
+            // 3. SAVE DATA (This is the jump recording)
+            times.push(current_time);
+            sz.push(magnetization(l, &psi, basis));
+            types.push(selected_i); // Original Encoding (0..2L-1)
+            occ.push(occupation(l, &psi, basis));
+
+            jumped = true;
         }
 
         if !jumped {
@@ -410,14 +435,14 @@ fn simulate_trajectory(
 
 fn main() {
     // --- 1. Set System Parameters ---
-    let l: usize = 14;
+    let l: usize = 10;
     let omega = 1.0;
-    let gamma_plus = 0.002;
-    let gamma_minus = 0.02;
+    let gamma_plus = 0.2;
+    let gamma_minus = 0.2;
     let dt = 1e-3;
     let total_time = 50.0;
     
-    let num_trajectories = 1; 
+    let num_trajectories = 40; 
     let output_dir = "../data/trajectories";
 
     println!("--- PXP Model: Parallel Trajectories (Separate Files) ---");
