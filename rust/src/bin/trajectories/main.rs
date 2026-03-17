@@ -248,6 +248,34 @@ fn get_random_initial_state(dim: usize) -> Array1<Complex64> {
     psi
 }
 
+
+// Generates the Neel initial state
+fn get_neel_initial_state(dim: usize, l: usize, basis_dict: &HashMap<u64, usize>) -> Array1<Complex64> {
+    
+    // 1. Generate random real and imaginary parts using Standard Normal distribution
+    // We use a helper from ndarray-rand or just map over a loop if you don't have that crate.
+    // Here is the standard Rust loop way to avoid extra dependencies:
+    let neel_key = (2.0_f64.powf(l as f64 + 1.0) / 3.0).floor() as u64;
+    let neel_key_trans = (2.0_f64.powf(l as f64) / 3.0).floor() as u64;
+
+    let neel_key_idx: usize = *basis_dict.get(&neel_key).unwrap_or(&0);
+    let neel_key_trans_idx: usize = *basis_dict.get(&neel_key_trans).unwrap_or(&0);
+
+    let mut psi = Array1::<Complex64>::zeros(dim);
+
+    psi[neel_key_idx] = Complex64::new(1.0, 0.0);
+    psi[neel_key_trans_idx] = Complex64::new(1.0, 0.0);
+
+    // 2. Calculate Norm: sqrt( sum |c_j|^2 )
+    let norm = psi.mapv(|x| x.norm_sqr()).sum().sqrt();
+
+    // 3. Normalize the vector
+    psi.mapv_inplace(|x| x / norm);
+
+    psi
+}
+
+
 // MAGNETIZATION
 fn magnetization(l: usize, psi: &Array1<Complex64>, basis: &[u64]) -> f64 {
     let mut mz = 0.0;
@@ -310,7 +338,7 @@ fn simulate_trajectory(
 
     // --- 2. Initial State ---
     let dim = basis.len();
-    let mut psi = get_random_initial_state(dim); 
+    let mut psi = get_neel_initial_state(dim, l, basis_dict); 
     let steps = (total_time / dt).ceil() as usize;
 
     // --- 3. Trackers ---
@@ -343,14 +371,14 @@ fn simulate_trajectory(
         // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
         // >>> BLOCK START: COMMENT THIS OUT TO RECORD ONLY JUMPS
         // >>> This block saves the smooth data between jumps.
-        if current_time >= next_record_time {
-            times.push(current_time);
-            sz.push(magnetization(l, &psi, basis));
-            occ.push(occupation(l, &psi, basis));
-            types.push(no_jump_marker); // Marker for "Continuous Evolution"
+        // if current_time >= next_record_time {
+        //     times.push(current_time);
+        //     sz.push(magnetization(l, &psi, basis));
+        //     occ.push(occupation(l, &psi, basis));
+        //     types.push(no_jump_marker); // Marker for "Continuous Evolution"
             
-            next_record_time += record_dt;
-        }
+        //     next_record_time += record_dt;
+        // }
         // >>> BLOCK END
         // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 
@@ -412,7 +440,7 @@ fn simulate_trajectory(
             // 3. SAVE DATA (This is the jump recording)
             times.push(current_time);
             sz.push(magnetization(l, &psi, basis));
-            types.push(selected_i); // Original Encoding (0..2L-1)
+            types.push(selected_i);
             occ.push(occupation(l, &psi, basis));
 
             jumped = true;
@@ -422,6 +450,10 @@ fn simulate_trajectory(
             psi = &psi + &dpsi_nh;
             let norm = psi.mapv(|x| x.norm_sqr()).sum().sqrt();
             psi.mapv_inplace(|x| x / norm);
+            times.push(current_time);
+            sz.push(magnetization(l, &psi, basis));
+            occ.push(occupation(l, &psi, basis));
+            types.push(no_jump_marker); // Marker for "Continuous Evolution"
         }
 
         current_time += dt;
@@ -439,10 +471,10 @@ fn main() {
     let omega = 1.0;
     let gamma_plus = 0.2;
     let gamma_minus = 0.2;
-    let dt = 1e-3;
+    let dt = 1e-4;
     let total_time = 50.0;
     
-    let num_trajectories = 40; 
+    let num_trajectories = 100; 
     let output_dir = "../data/trajectories";
 
     println!("--- PXP Model: Parallel Trajectories (Separate Files) ---");
@@ -459,6 +491,7 @@ fn main() {
     let basis_states = fibonacci_basis(l);
     let basis_dict = create_basis_dict(&basis_states);
     println!("Basis Dimension: {}", basis_states.len());
+
 
     let h = hamiltonian(l, &basis_states, &basis_dict, omega);
     let decay = jump_hermitian(l, &basis_states, gamma_plus, gamma_minus); 
