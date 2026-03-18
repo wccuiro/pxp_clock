@@ -8,4 +8,6 @@
 *.parquet
 *.txt
 
+julia/*.so
+
 /rust/target
