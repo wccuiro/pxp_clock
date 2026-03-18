@@ -3,16 +3,17 @@ using ITensorMPS   # Fix 1: replaces deprecated ITensorTDVP
 using Random
 using Printf
 
-function simulate_pxp_trajectories()
+function simulate_pxp_trajectories(;
   # --- 1. System Parameters ---
-  L = 8
-  Omega = 1.0
-  gamma_plus  = 0.2
-  gamma_minus = 0.2
-  dt = 1e-1
-  total_time = 50.0
-  num_trajectories = 40
-  output_dir = "data/trajectoriesTN"
+  L = 20,
+  Omega = 1.0,
+  gamma_plus  = 0.2,
+  gamma_minus = 0.2,
+  dt = 1e-1,
+  total_time = 50.0,
+  num_trajectories = 40,
+  output_dir = "../data/trajectoriesTN"
+  )
 
   mkpath(output_dir)
   # Fix 11: round instead of ceil to avoid off-by-one from floating-point arithmetic
@@ -79,9 +80,17 @@ function simulate_pxp_trajectories()
     current_time    = 0.0
     p_accum         = 1.0
     r_threshold     = rand(rng)
-    record_dt       = 0.1
+    record_dt       = 1e-2
     next_record_time = 0.0
     NO_JUMP = -1   # Fix 9: use -1 as no-jump sentinel (was 2*L, fragile)
+
+    # Record jump event
+    push!(times,      current_time)
+    push!(jump_types, 0)  # 0 = L+ (excitation), 1 = L- (decay)
+    # Fix 8: real.() needed because psi is now complex
+    occ_arr = real.(expect(psi, "ProjUp"))
+    push!(occ_vals, sum(occ_arr) / L)
+    push!(sz_vals,  sum(2 .* occ_arr .- 1.0) / L)
 
     for step in 1:steps
 
@@ -166,4 +175,6 @@ function simulate_pxp_trajectories()
   end
 end
 
-@time simulate_pxp_trajectories()
+if abspath(PROGRAM_FILE) == @__FILE__
+    @time simulate_pxp_trajectories()
+end

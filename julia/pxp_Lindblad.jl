@@ -75,7 +75,7 @@ function build_lindbladian(sites, Omega, gamma_plus, gamma_minus)
         push!(ops_k, "ProjDn", k(j+1))
         
         # Add to OpSum (splatting the operators)
-        os += -1.0im * Omega, ops_k...
+        os += -2.0im * Omega, ops_k...
 
         # 2. Term +i (I x H^T) acting on Bras
         # H is real symmetric, so H^T = H.
@@ -86,7 +86,7 @@ function build_lindbladian(sites, Omega, gamma_plus, gamma_minus)
         push!(ops_b, "Sx", b(j))
         push!(ops_b, "ProjDn", b(j+1))
         
-        os += +1.0im * Omega, ops_b...
+        os += +2.0im * Omega, ops_b...
         
         # --- Dissipator Terms ---
         # L = sqrt(gamma) * P_{j-1} * Sigma^+_j * P_{j+1}
@@ -245,13 +245,13 @@ end
 
 function main()
     # A. Parameters
-    N = 20                # Physical sites
+    N = 10                # Physical sites
     Omega = 1.0           # Rabi frequency
     gamma_plus = 0.2           # Pumping strength
     gamma_minus = 0.2          # Sraining strength
 
     dt = 0.1             # Time step
-    t_total = 5.0         # Final time
+    t_total = 50.0         # Final time
     output_file = "occupation_dynamics.txt"
 
     println("--- Simulating Dissipative OmegaPXP Model ---")
@@ -287,4 +287,4 @@ function main()
 end
 
 # Run the simulation
-main()
+@time main()
