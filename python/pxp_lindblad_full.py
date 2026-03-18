@@ -312,9 +312,9 @@ def heat_current(rho, sup_p_D, sup_m_D,H):
 L = 8
 basis = generation_basis(L)
 
-omega = 10.0
-gamma_plus = 0.002
-gamma_minus = 0.02
+omega = 1.0
+gamma_plus = 0.5
+gamma_minus = 0.25
 
 H = Hamiltonian(L, basis[0], basis[1], omega)
 D = dissipation(L, basis[0], basis[1], gamma_plus, gamma_minus)
@@ -325,16 +325,16 @@ eigvals_Lind, eigvecs_Lind = np.linalg.eig(Lind)
 # plt.plot(np.real(eigvals_Lind), np.imag(eigvals_Lind), 'o')
 # plt.show()
 for i in range(len(eigvals_Lind)):
-  # print(str(eigvals_Lind[i].real)+','+str(eigvals_Lind[i].imag))
+  print(str(eigvals_Lind[i].real)+','+str(eigvals_Lind[i].imag))
   if np.abs(eigvals_Lind[i]) < 1e-10:
-    print("Steady state eigenvalue:", eigvals_Lind[i])
+    # print("Steady state eigenvalue:", eigvals_Lind[i])
     steady_state = eigvecs_Lind[:,i].reshape((H.shape[0], H.shape[0]), order='C')
     steady_state = 0.5*(steady_state + steady_state.conj().T)
     steady_state = steady_state / np.trace(steady_state)
-    print("Steady state trace: ", np.trace(steady_state))
+    # print("Steady state trace: ", np.trace(steady_state))
     magnetization = np.real(np.trace(steady_state @ magnetization (L, basis[0], basis[1])))
-    print("Steady state magnetization per site: ", magnetization)
-    print("Steady state found at index ", i)
+    # print("Steady state magnetization per site: ", magnetization)
+    # print("Steady state found at index ", i)
 
 # W = transition_matrix(L, basis[0], basis[1], gamma_plus, gamma_minus, pbc=PBC, k=k_sector)
 
