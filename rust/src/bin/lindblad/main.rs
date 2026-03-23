@@ -859,8 +859,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Total basis states in Q=0 sector: {}", basis_states.len());
     
-    let g_values = Array1::linspace(0.0001, 2.0, 10);
-    let omega_values = Array1::linspace(0.0, 2.0, 10);
+    let g_values = Array1::linspace(0.0001, 5.0, 40);
+    let omega_values = Array1::linspace(0.0, 5.0, 40);
 
     // let raw_space = Array1::linspace(0.5, 1.0, 3);
     // let lower_segment = raw_space.slice(s![..-1]);
