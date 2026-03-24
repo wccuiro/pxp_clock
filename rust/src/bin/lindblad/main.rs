@@ -755,47 +755,48 @@ pub fn analyze_lindbladian(
         }
 
         // 5. The Jordan Test: Compute Rank via SVD
-        // We check if these m_a eigenvectors are linearly independent.
-        // If they are parallel (Jordan block), SVD will show fewer non-zero singular values.
         let (_, sigma, _) = raw_subspace.svd(false, false)?;
-        
-        // Count non-zero singular values (Geometric Multiplicity, m_g)
-        // We use a robust tolerance for "zero"
         let rank_tol = 1e-5; 
         let m_g = sigma.iter().filter(|&&s| s > rank_tol).count();
 
-        // 6. Determine Effective Block Size
-        // If m_g < m_a, we are missing eigenvectors -> Jordan Block.
-        // If m_g == m_a, we have a full set -> Diagonalizable (Size = 1).
-        let effective_size = if m_g < m_a { m_a } else { 1 };
-
-        // 7. Compute Overlap (Projection onto the Range)
-        // We perform SVD again to get the U matrix (Orthonormal Basis)
-        // This is safe even if vectors are parallel.
+        // [RESTORED] Compute the orthonormal basis `u`
+        // This is required for both branches below to calculate overlaps.
         let (u_opt, _, _) = raw_subspace.svd(true, false)?;
         let u = u_opt.ok_or("SVD U calculation failed")?;
-        
-        let mut overlap_sq = 0.0;
-        // Only sum over the valid geometric dimensions (m_g)
-        // Any dimension beyond m_g is numerical noise.
-        for k in 0..m_g {
-            let u_k = u.column(k);
-            let dot = u_k.mapv(|x| x.conj()).dot(rho); // <u|rho>
-            overlap_sq += dot.norm_sqr();
-        }
-        let overlap = overlap_sq.sqrt();
 
-        // 8. Store Result
-        results.push(SpectralData {
-            real_eigenvalue: current_val.re,
-            imag_eigenvalue: current_val.im,
-            overlap,
-            block_size: effective_size,
-        });
+        // 6-8: Branch based on diagonalizability
+        if m_g == m_a {
+            // Fully diagonalizable (Jordan blocks of size 1)
+            for k in 0..m_g {
+                let u_k = u.column(k);
+                let overlap = u_k.mapv(|x| x.conj()).dot(rho).norm();
+                
+                results.push(SpectralData {
+                    real_eigenvalue: current_val.re,
+                    imag_eigenvalue: current_val.im,
+                    overlap,
+                    block_size: 1,
+                });
+            }
+        } else {
+            // Defective subspace (Jordan blocks > 1)
+            // [FIXED] Explicitly designate 0.0 as an f64 to resolve the ambiguous float error.
+            let mut overlap_sq = 0.0f64; 
+            for k in 0..m_g {
+                let u_k = u.column(k);
+                overlap_sq += u_k.mapv(|x| x.conj()).dot(rho).norm_sqr();
+            }
+            
+            results.push(SpectralData {
+                real_eigenvalue: current_val.re,
+                imag_eigenvalue: current_val.im,
+                overlap: overlap_sq.sqrt(),
+                block_size: m_a, // Note: This still assumes a single block of size m_a
+            });
+        }
 
         // Advance the outer loop index past this cluster
-        i = j;
-    }
+        i = j;    }
 
     Ok(results)
 }
@@ -817,7 +818,7 @@ struct SimulationResult {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let l = 8;
+    let l = 10;
     let q_sector = 0;
     
     let basis = translationally_invariant_basis(l);
@@ -859,8 +860,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Total basis states in Q=0 sector: {}", basis_states.len());
     
-    let g_values = Array1::linspace(0.0001, 5.0, 40);
-    let omega_values = Array1::linspace(0.0, 5.0, 40);
+    let g_values = Array1::linspace(0.0001, 2.0, 10);
+    let omega_values = Array1::linspace(0.0, 2.0, 10);
 
     // let raw_space = Array1::linspace(0.5, 1.0, 3);
     // let lower_segment = raw_space.slice(s![..-1]);
