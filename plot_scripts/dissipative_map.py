@@ -40,13 +40,8 @@ long_df = pd.DataFrame({
     'blockSize': blockSize_vals.flatten()
 }).dropna() # Drops empty pairs if the CSV has rows of varying lengths
 
-# 3. Normalize to project onto the unit circle
-iphi = long_df['val_real'] + 1j * long_df['val_imag']
-
-
-long_df['x_norm'] = np.real(np.exp(iphi))
-long_df['y_norm'] = np.imag(np.exp(iphi))
-
+# 3. Store the base complex phase. Time evolution will be applied dynamically.
+long_df['iphi'] = long_df['val_real'] + 1j * long_df['val_imag']
 
 # Extract unique, sorted parameters for the sliders
 unique_g = np.sort(long_df['g'].unique())
@@ -61,11 +56,15 @@ ax.plot(np.cos(theta), np.sin(theta), linestyle='--', color='gray', alpha=0.5)
 
 # Initialize scatter plot with ALL matching points for the first slider positions
 initial_data = long_df[(long_df['g'] == unique_g[0]) & (long_df['omega'] == unique_omega[0])]
-point = ax.scatter(initial_data['x_norm'].values, 
-                 initial_data['y_norm'].values,
-                 c = initial_data['overlap'].values, 
-                 cmap='viridis', 
-                 s=25, alpha=0.7)
+initial_t = 1.0 # Must match slider_t valinit
+initial_phase = np.exp(initial_data['iphi'].values * initial_t)
+
+point = ax.scatter(np.real(initial_phase), 
+                   np.imag(initial_phase),
+                   c=initial_data['overlap'].values, 
+                   cmap='viridis', 
+                   s=25, alpha=0.7)
+
 
 cbar = plt.colorbar(point, ax=ax)
 cbar.set_label('Overlap with Neel') 
@@ -77,29 +76,39 @@ ax.set_aspect('equal')
 ax.set_xlabel(r"Re($e^{-i \phi}$)")
 ax.set_ylabel(r"Im($e^{-i \phi}$)")
 ax.grid(True, alpha=0.3)
-ax.set_title(f"g = {unique_g[0]:.4f}, $\omega$ = {unique_omega[0]:.4f}")
+ax.set_title(r"g = {unique_g[0]:.4f}, $\omega$ = {unique_omega[0]:.4f}")
 
 # 5. Interactive sliders
+ax_t = plt.axes([0.15, 0.15, 0.7, 0.03])
 ax_g = plt.axes([0.15, 0.1, 0.7, 0.03])
 ax_omega = plt.axes([0.15, 0.05, 0.7, 0.03])
 
+
+slider_t = Slider(ax=ax_t, label='t', valmin=0.0, valmax=10.0, valinit=1.0, valstep=0.01)
 slider_g = Slider(ax=ax_g, label='g', valmin=unique_g.min(), valmax=unique_g.max(), valinit=unique_g[0], valstep=unique_g)
 slider_omega = Slider(ax=ax_omega, label=r'$\omega$', valmin=unique_omega.min(), valmax=unique_omega.max(), valinit=unique_omega[0], valstep=unique_omega)
 
 def update(val):
     current_g = slider_g.val
     current_omega = slider_omega.val
+    current_t = slider_t.val
     
     # Isolate ALL points matching the current slider states
     row_data = long_df[(np.isclose(long_df['g'], current_g)) & (np.isclose(long_df['omega'], current_omega))]
     
     if not row_data.empty:
-        point.set_offsets(np.c_[row_data['x_norm'].values, row_data['y_norm'].values])
-        ax.set_title(f"g = {current_g:.4f}, $\omega$ = {current_omega:.4f}")
+        # Calculate time evolution dynamically for this frame
+        evolved_phase = np.exp(row_data['iphi'].values * current_t)
+        new_x = np.real(evolved_phase)
+        new_y = np.imag(evolved_phase)
+        
+        point.set_offsets(np.c_[new_x, new_y])
+        ax.set_title(r"g = {current_g:.4f}, $\omega$ = {current_omega:.4f}, t = {current_t:.1f}")
         point.set_array(row_data['overlap'].values)
     
     fig.canvas.draw_idle()
 
+slider_t.on_changed(update)
 slider_g.on_changed(update)
 slider_omega.on_changed(update)
 
