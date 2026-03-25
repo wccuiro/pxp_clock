@@ -946,7 +946,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 
                 // --- 1. Decay Analysis ---
                 if let Ok(analysis) = analyze_lindbladian(&evals, &evecs, &n_matrix, &rho_vec_neel, 1e-6) {
-                    res.decay_str.push_str(&format!("{},{},{},", gp, gm, omega)); 
+                    res.decay_str.push_str(&format!("{},{},{}", gp, gm, omega)); 
                     for data in analysis {
                         res.decay_str.push_str(&format!(",{:.10},{:.10},{:.10},{},{}", 
                             data.real_eigenvalue, data.imag_eigenvalue, data.overlap, data.occupation, data.block_size));
@@ -955,10 +955,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }                
 
                 // --- 2. Eigenvalues Dump ---
-                res.eigenvalues_str.push_str(&format!("{},{},{},", gp, gm, omega));
+                res.eigenvalues_str.push_str(&format!("{},{},{}", gp, gm, omega));
                 for (i, eval) in evals.iter().enumerate() {
-                    res.eigenvalues_str.push_str(&format!("{},{}", eval.re, eval.im));
-                    if i < evals.len() - 1 { res.eigenvalues_str.push(','); }
+                    res.eigenvalues_str.push_str(&format!(",{},{}", eval.re, eval.im));
                 }
                 res.eigenvalues_str.push('\n');
 
