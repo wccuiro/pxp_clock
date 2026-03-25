@@ -693,14 +693,14 @@ pub struct SpectralData {
     pub real_eigenvalue: f64,
     pub imag_eigenvalue: f64,
     pub overlap: f64,
-    /// If the matrix is defective (Jordan block), this is the size of the block (>1).
-    /// If it is just a normal degeneracy, this remains 1.
+    pub occupation: f64,
     pub block_size: usize, 
 }
 
 pub fn analyze_lindbladian(
     eigenvalues: &Array1<Complex64>,
     eigenvectors: &Array2<Complex64>,
+    occ_op: &Array2<Complex64>,
     rho: &Array1<Complex64>,
     tol: f64,
 ) -> Result<Vec<SpectralData>, Box<dyn Error>> {
@@ -769,28 +769,35 @@ pub fn analyze_lindbladian(
             // Fully diagonalizable (Jordan blocks of size 1)
             for k in 0..m_g {
                 let u_k = u.column(k);
-                let overlap = u_k.mapv(|x| x.conj()).dot(rho).norm();
+                let overlap = (&u_k).mapv(|x| x.conj()).dot(rho).norm();
+
+                let occupation = (&u_k).mapv(|x| x.conj()).dot(occ_op).dot(&u_k).norm();                
                 
                 results.push(SpectralData {
                     real_eigenvalue: current_val.re,
                     imag_eigenvalue: current_val.im,
                     overlap,
+                    occupation,
                     block_size: 1,
                 });
             }
         } else {
             // Defective subspace (Jordan blocks > 1)
             // [FIXED] Explicitly designate 0.0 as an f64 to resolve the ambiguous float error.
-            let mut overlap_sq = 0.0f64; 
+            let mut overlap_sq = 0.0f64;
+            let mut occupation_sq = 0.0f64;
             for k in 0..m_g {
                 let u_k = u.column(k);
-                overlap_sq += u_k.mapv(|x| x.conj()).dot(rho).norm_sqr();
+                overlap_sq += (&u_k).mapv(|x| x.conj()).dot(rho).norm_sqr();
+
+                occupation_sq += (&u_k).mapv(|x| x.conj()).dot(occ_op).dot(&u_k).norm_sqr();
             }
             
             results.push(SpectralData {
                 real_eigenvalue: current_val.re,
                 imag_eigenvalue: current_val.im,
                 overlap: overlap_sq.sqrt(),
+                occupation: occupation_sq.sqrt(),
                 block_size: m_a, // Note: This still assumes a single block of size m_a
             });
         }
@@ -818,7 +825,7 @@ struct SimulationResult {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let l = 10;
+    let l = 8;
     let q_sector = 0;
     
     let basis = translationally_invariant_basis(l);
@@ -860,7 +867,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Total basis states in Q=0 sector: {}", basis_states.len());
     
-    let g_values = Array1::linspace(0.0001, 2.0, 10);
+    let gp_values = Array1::linspace(0.0001, 2.0, 10);
+    let gm_values = Array1::linspace(0.0001, 2.0, 10);
     let omega_values = Array1::linspace(0.0, 2.0, 10);
 
     // let raw_space = Array1::linspace(0.5, 1.0, 3);
@@ -873,9 +881,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // let g_values = Array1::from(result);
 
     let mut parameters = Vec::new();
-    for &g in &g_values {
-        for &omega in &omega_values {
-            parameters.push((g, omega));
+    for &gp in &gp_values {
+        for &gm in &gm_values {
+            for &omega in &omega_values {
+                parameters.push((gp, gm, omega));
+            }
         }
     }
 
@@ -902,7 +912,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 1. RUN PARALLEL SIMULATIONS
     let results: Vec<SimulationResult> = parameters
         .par_iter()
-        .map(|&(g, omega)| {
+        .map(|&(gp, gm, omega)| {
             // A. Setup Buffers for Output
             let mut res = SimulationResult {
                 occupation_str: String::new(),
@@ -914,8 +924,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // B. Build Matrix (Directly Dense)
             // Allocates ~2.2GB for L=12
 
-            let gamma_minus = 1.0;
-            let gamma_plus = g * gamma_minus;
+            let gamma_minus = gm;
+            let gamma_plus = gp;
             // let mut l_mat = Array2::<Complex64>::zeros((basis_states.len(), basis_states.len()));
             
             // // Call the SERIAL builder
@@ -935,17 +945,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Ok((evals, evecs)) = l_cal_dense.eig() {
                 
                 // --- 1. Decay Analysis ---
-                if let Ok(analysis) = analyze_lindbladian(&evals, &evecs, &rho_vec_neel, 1e-6) {
-                    res.decay_str.push_str(&format!("{},{}", g, omega)); 
+                if let Ok(analysis) = analyze_lindbladian(&evals, &evecs, &n_matrix, &rho_vec_neel, 1e-6) {
+                    res.decay_str.push_str(&format!("{},{},{},", gp, gm, omega)); 
                     for data in analysis {
-                        res.decay_str.push_str(&format!(",{:.10},{:.10},{:.10},{}", 
-                            data.real_eigenvalue, data.imag_eigenvalue, data.overlap, data.block_size));
+                        res.decay_str.push_str(&format!(",{:.10},{:.10},{:.10},{},{}", 
+                            data.real_eigenvalue, data.imag_eigenvalue, data.overlap, data.occupation, data.block_size));
                     }
                     res.decay_str.push('\n');
                 }                
 
                 // --- 2. Eigenvalues Dump ---
-                res.eigenvalues_str.push_str(&format!("{},{},", g, omega));
+                res.eigenvalues_str.push_str(&format!("{},{},{},", gp, gm, omega));
                 for (i, eval) in evals.iter().enumerate() {
                     res.eigenvalues_str.push_str(&format!("{},{}", eval.re, eval.im));
                     if i < evals.len() - 1 { res.eigenvalues_str.push(','); }
@@ -963,7 +973,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             .map(|(p, n)| format!("{:.16}, {:.6}", p, n))
                             .collect::<Vec<String>>()
                             .join(", ");
-                        res.std_eigenvalues_str.push_str(&format!("{},{},{}\n", g, omega, formatted_data));
+                        res.std_eigenvalues_str.push_str(&format!("{},{},{},{}\n", gp, gm, omega, formatted_data));
 
                         // Occupation
                         let tr_rho = compute_trace(l, &basis_states, &rho_vec, q_sector, &phases);
@@ -976,7 +986,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         if tr_rho.norm() > 1e-10 {
                             let exp_n = (tr_n / tr_rho).re;
                             let exp_nn = (tr_nn / tr_rho).re;
-                            res.occupation_str.push_str(&format!("{},{},{},{}\n", exp_n, exp_nn, g, omega));
+                            res.occupation_str.push_str(&format!("{},{},{},{},{}\n", exp_n, exp_nn, gp, gm, omega));
                         }
                     }
                 }
@@ -988,7 +998,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 2. WRITE TO FILES (After loop, safe and fast)
     let mut file_occupation = File::create("occupation.csv")?;
-    writeln!(file_occupation, "n,nn,g,omega")?;
+    writeln!(file_occupation, "n,nn,gp,gm,omega")?;
     
     let mut file_std = File::create("std_eigenvalues.csv")?;
     let mut file_evals = File::create("eigenvalues.csv")?;

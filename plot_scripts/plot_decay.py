@@ -84,7 +84,7 @@ def interactive_plot(df):
     # -- Initialize plots --
     for i, ax in enumerate(axes_list):
         ax.set_ylabel("Overlap Magnitude")
-        ax.set_yscale('log')
+        # ax.set_yscale('log')
         ax.grid(True, which="both", ls="--", alpha=0.3)
         ax.set_ylim(y_min * 0.5, y_max * 1.5)
 
@@ -179,5 +179,5 @@ def interactive_plot(df):
     plt.show()
 
 # Run
-df = load_data('../rust/decay.csv')
+df = load_data('../rust/decay_12_merged.csv')
 interactive_plot(df)

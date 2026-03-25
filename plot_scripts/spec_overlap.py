@@ -39,7 +39,7 @@ def load_data(filename):
 # --- Main Script ---
 
 # 1. Load Data
-filename = '../rust/decay.csv' # Make sure this file is in the same directory
+filename = '../rust/decay_8_80x80.csv' # Make sure this file is in the same directory
 data = load_data(filename)
 
 # Get unique values for snapping
@@ -71,9 +71,9 @@ subset, current_g, current_w = get_subset(init_g, init_w)
 # 1. Grey background dots (context) - optional, can be noisy if too many points
 # 2. Colored main scatter plot
 scatter = ax.scatter(subset['decay'], subset['imag'], 
-                     c=subset['overlap'], cmap='viridis', 
+                     c=subset['overlap'], cmap='Oranges', 
                      s=subset['overlap']*500, alpha=0.8, edgecolors='k',
-                     vmin=0, vmax=np.max(data['overlap'])) # Fix color scale globally
+                     vmin=0, vmax=np.max(data['overlap'])/2) # Fix color scale globally
 
 # Add colorbar
 cbar = fig.colorbar(scatter, ax=ax)

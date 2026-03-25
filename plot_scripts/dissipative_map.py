@@ -13,16 +13,18 @@ g_vals = df[0].values
 omega_vals = df[1].values
 
 # Extract real (even indices from 2 onwards) and imag (odd indices from 3 onwards)
-real_cols = df.columns[2::4]
-imag_cols = df.columns[3::4]
-overlap_cols = df.columns[4::4]
-blockSize_cols = df.columns[5::4]
+real_cols = df.columns[2::5]
+imag_cols = df.columns[3::5]
+overlap_cols = df.columns[4::5]
+occupation_cols = df.columns[5::5]
+blockSize_cols = df.columns[6::5]
 
 # Ensure we only take complete pairs in case the CSV has a trailing comma
 min_len = min(len(real_cols), len(imag_cols))
 real_vals = df[real_cols[:min_len]].values
 imag_vals = df[imag_cols[:min_len]].values
 overlap_vals = df[overlap_cols[:min_len]].values
+occupation_vals = df[occupation_cols[:min_len]].values
 blockSize_vals = df[blockSize_cols[:min_len]].values
 
 # Repeat g and omega so they align with the flattened arrays
@@ -37,6 +39,7 @@ long_df = pd.DataFrame({
     'val_real': real_vals.flatten(),
     'val_imag': imag_vals.flatten(),
     'overlap': overlap_vals.flatten(),
+    'occupation': occupation_vals.flatten(),
     'blockSize': blockSize_vals.flatten()
 }).dropna() # Drops empty pairs if the CSV has rows of varying lengths
 
@@ -104,7 +107,7 @@ def update(val):
         
         point.set_offsets(np.c_[new_x, new_y])
         ax.set_title(r"g = {current_g:.4f}, $\omega$ = {current_omega:.4f}, t = {current_t:.1f}")
-        point.set_array(row_data['overlap'].values)
+        point.set_array(row_data['occupation'].values)
     
     fig.canvas.draw_idle()
 
