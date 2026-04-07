@@ -246,13 +246,13 @@ end
 function main()
     # A. Parameters
     N = 10                # Physical sites
-    Omega = 1.0           # Rabi frequency
-    gamma_plus = 0.2           # Pumping strength
+    Omega = 5.0           # Rabi frequency
+    gamma_plus = 0.01           # Pumping strength
     gamma_minus = 0.2          # Sraining strength
 
     dt = 0.1             # Time step
     t_total = 50.0         # Final time
-    output_file = "occupation_dynamics.txt"
+    output_file = "occupation_dynamics_gm.txt"
 
     println("--- Simulating Dissipative OmegaPXP Model ---")
     println("Sites: $N, Omega: $Omega, Gamma+: $gamma_plus, Gamma-: $gamma_minus")

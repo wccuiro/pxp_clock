@@ -825,7 +825,7 @@ struct SimulationResult {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let l = 8;
+    let l = 10;
     let q_sector = 0;
     
     let basis = translationally_invariant_basis(l);
@@ -867,9 +867,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Total basis states in Q=0 sector: {}", basis_states.len());
     
-    let gp_values = Array1::linspace(0.0001, 2.0, 10);
-    let gm_values = Array1::linspace(0.0001, 2.0, 10);
-    let omega_values = Array1::linspace(0.0, 2.0, 10);
+    let gp_values = Array1::linspace(0.001, 0.2, 2);
+    let gm_values = Array1::linspace(0.001, 0.2, 2);
+    let omega_values = Array1::linspace(1.0, 2.0, 1);
 
     // let raw_space = Array1::linspace(0.5, 1.0, 3);
     // let lower_segment = raw_space.slice(s![..-1]);
@@ -985,7 +985,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         if tr_rho.norm() > 1e-10 {
                             let exp_n = (tr_n / tr_rho).re;
                             let exp_nn = (tr_nn / tr_rho).re;
-                            res.occupation_str.push_str(&format!("{},{},{},{},{}\n", exp_n, exp_nn, gp, gm, omega));
+                            res.occupation_str.push_str(&format!("{},{},{},{},{}\n", gp, gm, omega, exp_n, exp_nn));
                         }
                     }
                 }
@@ -997,7 +997,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 2. WRITE TO FILES (After loop, safe and fast)
     let mut file_occupation = File::create("occupation.csv")?;
-    writeln!(file_occupation, "n,nn,gp,gm,omega")?;
+    writeln!(file_occupation, "gp,gm,omega,n,nn")?;
     
     let mut file_std = File::create("std_eigenvalues.csv")?;
     let mut file_evals = File::create("eigenvalues.csv")?;

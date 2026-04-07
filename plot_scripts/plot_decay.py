@@ -17,24 +17,28 @@ def load_data(filename):
                 parts = [p.strip() for p in line.split(',') if p.strip()]
                 if len(parts) < 3: continue
                 try:
-                    g = float(parts[0])
-                    omega = float(parts[1])
-                    raw_data = parts[2:]
-                    num_modes = len(raw_data) // 4
+                    gp = float(parts[0])
+                    gm = float(parts[1])
+                    omega = float(parts[2])
+                    raw_data = parts[3:]
+                    num_modes = len(raw_data) // 5
                     for i in range(num_modes):
-                        idx = i * 4
+                        idx = i * 5
                         # Physics convention: Decay Rate = -Re(Eigenvalue)
                         decay_rate = -float(raw_data[idx])
                         energy_oscillation = float(raw_data[idx+1])
                         overlap = float(raw_data[idx+2])
-                        size = int(float(raw_data[idx+3]))
-                        
+                        occupation = float(raw_data[idx+3])
+                        size = int(float(raw_data[idx+4]))
+
                         data_points.append({
-                            'g': g, 
+                            'gp': gp,
+                            'gm': gm,
                             'omega': omega, 
                             'decay_rate': decay_rate,
                             'energy_oscillation': energy_oscillation,
-                            'overlap': overlap, 
+                            'overlap': overlap,
+                            'occupation': occupation,
                             'size': size
                         })
                 except ValueError: continue
@@ -48,14 +52,16 @@ def load_data(filename):
 def interactive_plot(df):
     if df.empty: print("No data."); return
 
-    unique_gs = sorted(df['g'].unique())
+    unique_gps = sorted(df['gp'].unique())
+    unique_gms = sorted(df['gm'].unique())
     unique_ws = sorted(df['omega'].unique())
-    init_g = unique_gs[0]
+    init_gp = unique_gps[0]
+    init_gm = unique_gms[0]
     init_w = unique_ws[0]
 
     # CHANGED: sharex=False because Energy and Decay Rate have different units/ranges
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 12), sharex=False)
-    plt.subplots_adjust(bottom=0.2, hspace=0.3)
+    plt.subplots_adjust(bottom=0.25, hspace=0.3)
     
     axes_list = [ax1, ax2]
     # Define which column to plot on X-axis for each subplot
@@ -120,10 +126,11 @@ def interactive_plot(df):
         annotations.clear()
 
         # 2. Filter Data
-        target_g = min(unique_gs, key=lambda x: abs(x - slider_g.val))
+        target_gp = min(unique_gps, key=lambda x: abs(x - slider_gp.val))
+        target_gm = min(unique_gms, key=lambda x: abs(x - slider_gm.val))
         target_w = min(unique_ws, key=lambda x: abs(x - slider_w.val))
-        subset = df[(df['g'] == target_g) & (df['omega'] == target_w)]
-        
+        subset = df[(df['gp'] == target_gp) & (df['gm'] == target_gm) & (df['omega'] == target_w)]
+
         normal = subset[subset['size'] == 1]
         jordan = subset[subset['size'] > 1]
 
@@ -162,22 +169,26 @@ def interactive_plot(df):
             else:
                 scats_jordan[i].set_offsets(np.zeros((0, 2)))
 
-        fig.suptitle(r"Spectrum at g={:.4f}, $\omega$={:.4f}".format(target_g, target_w), fontsize=14)
+        fig.suptitle(r"Spectrum at $\gamma_+$={:.4f}, $\gamma_-$={:.4f}, $\omega$={:.4f}".format(target_gp, target_gm, target_w), fontsize=14)
         fig.canvas.draw_idle()
 
     # -- Sliders --
-    ax_g = plt.axes([0.2, 0.1, 0.6, 0.03])
+    ax_gp = plt.axes([0.2, 0.15, 0.6, 0.03])
+    ax_gm = plt.axes([0.2, 0.1, 0.6, 0.03])
     ax_w = plt.axes([0.2, 0.05, 0.6, 0.03])
+    
 
-    slider_g = Slider(ax_g, 'g', min(unique_gs), max(unique_gs), valinit=init_g, valstep=unique_gs)
-    slider_w = Slider(ax_w, 'omega', min(unique_ws), max(unique_ws), valinit=init_w, valstep=unique_ws)
+    slider_gp = Slider(ax_gp, r'$\gamma_+$', min(unique_gps), max(unique_gps), valinit=init_gp, valstep=unique_gps)
+    slider_gm = Slider(ax_gm, r'$\gamma_-$', min(unique_gms), max(unique_gms), valinit=init_gm, valstep=unique_gms)
+    slider_w = Slider(ax_w, r'$\omega$', min(unique_ws), max(unique_ws), valinit=init_w, valstep=unique_ws)
 
-    slider_g.on_changed(update)
+    slider_gp.on_changed(update)
+    slider_gm.on_changed(update)
     slider_w.on_changed(update)
 
     update(0)
     plt.show()
 
 # Run
-df = load_data('../rust/decay_12_merged.csv')
+df = load_data('../rust/decay.csv')
 interactive_plot(df)
