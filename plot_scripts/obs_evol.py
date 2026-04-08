@@ -36,15 +36,18 @@ for i in range(len(df)):
     nn_avg = nn_avg[:min_len]
     
     
-    last_n = dg.iloc[i, 3] * np.ones(min_len) 
-    last_nn = dg.iloc[i, 4] * np.ones(min_len)
+    n_ss = dg.iloc[i, 3] * np.ones(min_len) 
+    nn_ss = dg.iloc[i, 4] * np.ones(min_len)
     
-    n_renorm = (n_avg - last_n) / (n_avg[0] - dg.iloc[i, 3])
-    nn_renorm = (nn_avg - last_nn) / (nn_avg[0] - dg.iloc[i, 4])
+    n_renorm = (n_avg - n_ss) / (n_avg[0] - n_ss[0])
+    nn_renorm = (nn_avg - nn_ss) / (nn_avg[0] - nn_ss[0])
 
     # Calculate Delta based on the formula: 
     # Delta = gamma * <nn> - (3*gamma + 1) * <n> + gamma
     delta = gamma * nn_avg - ((3 * gamma + 1) * n_avg) + gamma
+    
+    delta_ss = gamma * nn_ss - ((3 * gamma + 1) * n_ss) + gamma
+    delta_renorm = (delta - delta_ss) / (delta[0] - delta_ss)
     
     time_steps = range(min_len)
     
@@ -55,12 +58,12 @@ for i in range(len(df)):
     ax2.plot(time_steps, nn_renorm, label=r'$\gamma_-={gamma_minus}, \gamma_+={gamma_plus}, \Omega={omega}$'.format(gamma_minus=gamma_minus, gamma_plus=gamma_plus, omega=omega))
 
     # Plot 3: Delta
-    ax3.plot(time_steps, delta, label=r'$\gamma_-={gamma_minus}, \gamma_+={gamma_plus}, \Omega={omega}$'.format(gamma_minus=gamma_minus, gamma_plus=gamma_plus, omega=omega))
+    ax3.plot(time_steps, delta_renorm, label=r'$\gamma_-={gamma_minus}, \gamma_+={gamma_plus}, \Omega={omega}$'.format(gamma_minus=gamma_minus, gamma_plus=gamma_plus, omega=omega))
 
 # --- Configure Subplot 1: Occupation ---
 ax1.set_ylabel(r'Occupation $\langle n \rangle$')
 ax1.set_title(r'Occupation $\langle n \rangle$ in Time')
-ax1.set_ylim(0, 1.0) # Adjusted range, change if needed
+# ax1.set_ylim(0, 1.0) # Adjusted range, change if needed
 ax1.grid(True)
 ax1.legend(loc='upper right', fontsize='small')
 

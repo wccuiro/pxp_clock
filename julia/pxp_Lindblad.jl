@@ -191,6 +191,74 @@ function build_lindbladian(sites, Omega, gamma_plus, gamma_minus)
 end
 
 # -----------------------------------------------------------------------------
+# 2.1 Local Lindbladian (Alternative)
+# -----------------------------------------------------------------------------
+
+# Build a single local Lindbladian gate for site j (acting on k(j-1),b(j-1),k(j),b(j),k(j+1),b(j+1))
+function local_gate(sites, j, Omega, gamma_plus, gamma_minus, dt)
+    k(i) = 2*i - 1
+    b(i) = 2*i
+
+    # Extract the 6 local sites
+    sub_sites = sites[[k(j-1), b(j-1), k(j), b(j), k(j+1), b(j+1)]]
+
+    # Local indices: 1=k(j-1), 2=b(j-1), 3=k(j), 4=b(j), 5=k(j+1), 6=b(j+1)
+    os = OpSum()
+
+    os += -2im*Omega, "ProjDn",1, "Sx",3, "ProjDn",5
+    os += +2im*Omega, "ProjDn",2, "Sx",4, "ProjDn",6
+
+    if gamma_plus > 0
+        os += gamma_plus,      "ProjDn",1,"ProjDn",2,"S+",3,"S+",4,"ProjDn",5,"ProjDn",6
+        os += -0.5*gamma_plus, "ProjDn",1,"ProjDn",3,"ProjDn",5
+        os += -0.5*gamma_plus, "ProjDn",2,"ProjDn",4,"ProjDn",6
+    end
+
+    if gamma_minus > 0
+        os += gamma_minus,      "ProjDn",1,"ProjDn",2,"S-",3,"S-",4,"ProjDn",5,"ProjDn",6
+        os += -0.5*gamma_minus, "ProjDn",1,"ProjUp",3,"ProjDn",5
+        os += -0.5*gamma_minus, "ProjDn",2,"ProjUp",4,"ProjDn",6
+    end
+
+    L_local = MPO(os, sub_sites)
+    gate = contract(L_local)
+    gate = exp(dt * gate)  # proper exponentiation
+
+    return gate
+end
+
+function tebd_step!(rho, sites, Omega, gamma_plus, gamma_minus, dt; cutoff=1e-10, maxdim=200)
+    N = div(length(sites), 2)
+
+    # Note: To include boundaries properly as discussed earlier, 
+    # Group A should likely include j=2, 5, 8
+    # Group B should likely include j=3, 6, 9
+    # Group C should likely include j=4, 7
+    # Boundary gates (1 and N) must also be assigned to groups where they don't overlap.
+
+    # Layer A
+    for j in 2:3:(N-1)
+        gate = local_gate(sites, j, Omega, gamma_plus, gamma_minus, dt)
+        rho = apply(gate, rho; cutoff=cutoff, maxdim=maxdim)
+    end
+
+    # Layer B
+    for j in 3:3:(N-1)
+        gate = local_gate(sites, j, Omega, gamma_plus, gamma_minus, dt)
+        rho = apply(gate, rho; cutoff=cutoff, maxdim=maxdim)
+    end
+
+    # Layer C
+    for j in 4:3:(N-1)
+        gate = local_gate(sites, j, Omega, gamma_plus, gamma_minus, dt)
+        rho = apply(gate, rho; cutoff=cutoff, maxdim=maxdim)
+    end
+
+    # DO NOT normalize inner(rho, rho) here. The Lindbladian is naturally trace-preserving.
+    return rho
+end
+
+# -----------------------------------------------------------------------------
 # 3. Time Evolution Function
 # -----------------------------------------------------------------------------
 
@@ -200,7 +268,7 @@ end
 Evolves the state, normalizes, and measures occupation at each step.
 Returns arrays of time points and average occupations.
 """
-function run_evolution(rho_init, sites, H_solver, dt, t_total)
+function run_evolution_TDVP(rho_init, sites, H_solver, dt, t_total)
     rho = copy(rho_init)
     
     # # Pre-construct the trace operator
@@ -234,10 +302,48 @@ function run_evolution(rho_init, sites, H_solver, dt, t_total)
                    cutoff=1e-12,
                    nsweeps=2,
                    updater_kwargs=(; ishermitian=false, tol=1e-12, krylovdim=10))
+
     end
     
     return times, occupations
 end
+
+function run_evolution_TEBD(rho_init, sites, Omega, gamma_plus, gamma_minus, dt, t_total)
+    rho = copy(rho_init)
+    
+    # # Pre-construct the trace operator
+    # tr_mps = create_trace_mps(sites)
+    
+    times = Float64[]
+    occupations = Float64[]
+    
+    # Time loop
+    # We perform steps: Normalize -> Measure -> Evolve
+    for t in 0:dt:t_total
+        # 1. Normalize <1|rho> = 1
+        z = trace_mps(rho, sites)
+        # Avoid division by zero if dynamics are weird, though shouldn't happen
+        if abs(z) > 1e-14
+            rho /= z
+        end
+        
+        # 2. Measure Average Occupation
+        avg_occ = compute_average_occupation(rho, sites)
+        
+        # Store results
+        push!(times, t)
+        push!(occupations, avg_occ)
+        
+        println(@sprintf("Time: %.3f | Trace: %.5f | Imag Trace: %.5f | Avg Occ: %.5f", t, real(z), imag(z), avg_occ))
+        
+        # 3.1 Alternatively, use TEBD with local gates:
+        rho = tebd_step!(rho, sites, Omega, gamma_plus, gamma_minus, dt; cutoff=1e-10, maxdim=200)
+    end
+    
+    return times, occupations
+end
+
+
 
 # -----------------------------------------------------------------------------
 # 4. Main Function
@@ -246,11 +352,11 @@ end
 function main()
     # A. Parameters
     N = 10                # Physical sites
-    Omega = 5.0           # Rabi frequency
-    gamma_plus = 0.01           # Pumping strength
+    Omega = 1.0           # Rabi frequency
+    gamma_plus = 0.1           # Pumping strength
     gamma_minus = 0.2          # Sraining strength
 
-    dt = 0.1             # Time step
+    dt = 0.001             # Time step
     t_total = 50.0         # Final time
     output_file = "occupation_dynamics_gm.txt"
 
@@ -273,7 +379,10 @@ function main()
 
     # E. Run Evolution
     println("Starting Evolution...")
-    times, occs = run_evolution(rho_init, sites, H_solver, dt, t_total)
+    # times, occs = run_evolution_TDVP(rho_init, sites, H_solver, dt, t_total)
+
+    # Alternatively, use TEBD:
+    times, occs = run_evolution_TEBD(rho_init, sites, Omega, gamma_plus, gamma_minus, dt, t_total)
 
     # F. Save Results
     println("Saving results to $output_file...")
