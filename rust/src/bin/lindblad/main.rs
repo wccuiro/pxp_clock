@@ -19,7 +19,7 @@ struct Basis {
     rep_index: HashMap<u64, Vec<u64>>,
 }
 
-fn fibonacci_basis(l: usize) -> Vec<u64> {
+fn lucas_basis(l: usize) -> Vec<u64> {
     let mut states = Vec::new();
     for i in 0..(1u64 << l) {
         if i & (i >> 1) == 0 {
@@ -34,7 +34,7 @@ fn fibonacci_basis(l: usize) -> Vec<u64> {
 }
 
 fn translationally_invariant_basis(l: usize) -> Basis {
-    let states = fibonacci_basis(l);
+    let states = lucas_basis(l);
     let mut rep_states = Vec::new();
     let mut rep_index = HashMap::new();
     let mut basis_set: HashSet<u64> = states.into_iter().collect();
@@ -78,6 +78,8 @@ fn normalization_factor(l: usize, states: &[u64], k: i64, phases: &[Complex64]) 
         norm2.sqrt().re
     }
 }
+
+
 
 fn inner_product(
     a_in: &[u64],
@@ -822,10 +824,150 @@ struct SimulationResult {
     std_eigenvalues_str: String,
     eigenvalues_str: String,
     decay_str: String,
+    oee_str: String,
 }
 
+
+
+
+// ==========================================
+// ENTANGLEMENT ENTROPY FUNCTIONS
+// ==========================================
+
+/// Expands a Q=0 eigenmatrix into the doubled real-space basis.
+/// CRITICAL: Implements the exp(i*k*(j + j')) phase required for OEE vectorization.
+fn expand_eigenmatrix(
+    l: usize,
+    basis_states: &[BasisState],
+    eigenvector: &[Complex64],
+    phases: &[Complex64],
+) -> Vec<(u64, u64, Complex64)> {
+    // Use a HashMap to combine coefficients for identical real-space states.
+    // This prevents catastrophic O(N^2) performance degradation in the trace computation
+    // when states have orbits smaller than L (e.g., Néel states).
+    let mut expanded_map: HashMap<(u64, u64), Complex64> = HashMap::new();
+
+    for (idx, &c) in eigenvector.iter().enumerate() {
+        if c.norm() <= 1e-12 {
+            continue;
+        }
+        
+        let state = &basis_states[idx];
+        let norm_factor = state.norm_a * state.norm_b;
+        if norm_factor == 0.0 {
+            continue;
+        }
+
+        for j in 0..l {
+            let real_a = state.states_a[j];
+            for j_prime in 0..l {
+                let real_b = state.states_b[j_prime];
+
+                // The ket and the bra are both treated as kets in the doubled space.
+                // Hence, the forward phase is applied to both: k*(j + j_prime)
+                let phase_idx = (state.k * j as i64 + state.k * j_prime as i64).rem_euclid(l as i64);
+                let phase = phases[phase_idx as usize];
+
+                let coeff = c * phase / norm_factor;
+                
+                // Combine identical terms immediately
+                *expanded_map.entry((real_a, real_b)).or_insert(Complex64::new(0.0, 0.0)) += coeff;
+            }
+        }
+    }
+    
+    // Convert back to a flat vector for the entropy function
+    expanded_map.into_iter().map(|((a, b), c)| (a, b, c)).collect()
+}
+
+/// Generates the Fibonacci cube (open boundary conditions) for a given length.
+pub fn fibonacci_basis(l: usize) -> Vec<u64> {
+    (0..(1u64 << l))
+        .filter(|&state| state & (state >> 1) == 0)
+        .collect()
+}
+
+/// Splits a global state into Subsystem A (lower half) and Subsystem B (upper half).
+pub fn split_state(state: u64, l: usize) -> (u64, u64) {
+    let l_a = l / 2;
+    let mask_a = (1u64 << l_a) - 1;
+    
+    let a = state & mask_a;
+    let b = state >> l_a;
+    
+    (a, b)
+}
+
+/// Computes the Operator Entanglement Entropy of an expanded eigenmatrix.
+/// `expanded_state` is a vector of (Global Ket, Global Bra, Coefficient).
+pub fn operator_entanglement_entropy(
+    expanded_state: &[(u64, u64, Complex64)],
+    l: usize,
+) -> Result<f64, Box<dyn std::error::Error>> {
+    let l_a = l / 2;
+    let fib_a = fibonacci_basis(l_a);
+    
+    // Map Fibonacci states to integer indices for matrix construction
+    let mut a_idx_map = HashMap::new();
+    for (i, &state) in fib_a.iter().enumerate() {
+        a_idx_map.insert(state, i);
+    }
+    
+    let dim_a = fib_a.len();
+    let super_dim = dim_a * dim_a;
+    let mut sigma_a = Array2::<Complex64>::zeros((super_dim, super_dim));
+    
+    // 1. Group terms by their Subsystem B configuration (b_ket, b_bra)
+    let mut b_groups: HashMap<(u64, u64), Vec<((u64, u64), Complex64)>> = HashMap::new();
+    
+    for &(global_ket, global_bra, coeff) in expanded_state {
+        let (a_ket, b_ket) = split_state(global_ket, l);
+        let (a_bra, b_bra) = split_state(global_bra, l);
+        
+        b_groups.entry((b_ket, b_bra))
+            .or_default()
+            .push(((a_ket, a_bra), coeff));
+    }
+    
+    // 2. Perform the partial trace over the doubled B space
+    for (_, terms) in b_groups {
+        for &((a_ket1, a_bra1), c1) in &terms {
+            for &((a_ket2, a_bra2), c2) in &terms {
+                let row_idx = a_idx_map[&a_ket1] * dim_a + a_idx_map[&a_bra1];
+                let col_idx = a_idx_map[&a_ket2] * dim_a + a_idx_map[&a_bra2];
+                
+                sigma_a[[row_idx, col_idx]] += c1 * c2.conj();
+            }
+        }
+    }
+    
+    // 3. Normalize the reduced matrix
+    let mut trace = Complex64::new(0.0, 0.0);
+    for i in 0..super_dim {
+        trace += sigma_a[[i, i]];
+    }
+    
+    if trace.norm() < 1e-12 {
+        return Ok(0.0); 
+    }
+    sigma_a /= trace;
+    
+    // 4. Diagonalize and compute von Neumann entropy
+    let (eigenvalues, _) = sigma_a.eigh(ndarray_linalg::UPLO::Upper)?;
+    
+    let mut entropy = 0.0;
+    for &lambda in eigenvalues.iter() {
+        if lambda > 1e-12 {
+            entropy -= lambda * lambda.ln();
+        }
+    }
+    
+    Ok(entropy)
+}
+
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let l = 10;
+    let l = 12;
     let q_sector = 0;
     
     let basis = translationally_invariant_basis(l);
@@ -919,6 +1061,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 std_eigenvalues_str: String::new(),
                 eigenvalues_str: String::new(),
                 decay_str: String::new(),
+                oee_str: String::new(),
             };
 
             // B. Build Matrix (Directly Dense)
@@ -944,6 +1087,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // C. Diagonalize
             if let Ok((evals, evecs)) = l_cal_dense.eig() {
                 
+                res.oee_str.push_str(&format!("{},{},{}", gp, gm, omega));
+
+                for (&lambda, vec_view) in evals.iter().zip(evecs.columns()) {
+                    // Safely extract the contiguous vector
+                    let vec_contiguous = vec_view.to_vec();
+                    
+                    // Expand and compute
+                    let expanded = expand_eigenmatrix(l, &basis_states, &vec_contiguous, &phases);
+                    let entropy = operator_entanglement_entropy(&expanded, l).unwrap_or(0.0);
+                    
+                    // Append the triplet (Re[eval], Im[eval], OEE) continuously to the same line
+                    res.oee_str.push_str(&format!(",{:.10},{:.10},{:.6}", lambda.re, lambda.im, entropy));
+                }
+                // Terminate the row for this parameter combination
+                res.oee_str.push('\n');
+
                 // --- 1. Decay Analysis ---
                 if let Ok(analysis) = analyze_lindbladian(&evals, &evecs, &n_matrix, &rho_vec_neel, 1e-6) {
                     res.decay_str.push_str(&format!("{},{},{}", gp, gm, omega)); 
@@ -956,7 +1115,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 // --- 2. Eigenvalues Dump ---
                 res.eigenvalues_str.push_str(&format!("{},{},{}", gp, gm, omega));
-                for (i, eval) in evals.iter().enumerate() {
+                for (_i, eval) in evals.iter().enumerate() {
                     res.eigenvalues_str.push_str(&format!(",{},{}", eval.re, eval.im));
                 }
                 res.eigenvalues_str.push('\n');
@@ -1002,11 +1161,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut file_std = File::create("std_eigenvalues.csv")?;
     let mut file_evals = File::create("eigenvalues.csv")?;
     let mut file_decay = File::create("decay.csv")?;
+    let mut file_oee = File::create("oee.csv")?;
 
     for res in results {
         file_occupation.write_all(res.occupation_str.as_bytes())?;
         file_std.write_all(res.std_eigenvalues_str.as_bytes())?;
         file_evals.write_all(res.eigenvalues_str.as_bytes())?;
+        file_oee.write_all(res.oee_str.as_bytes())?;
         file_decay.write_all(res.decay_str.as_bytes())?;
     }
 
