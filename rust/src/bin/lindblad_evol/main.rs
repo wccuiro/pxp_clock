@@ -1075,14 +1075,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ----------------------------------------------------------------
     // 2. PARAMETER SWEEP PREPARATION
     // ----------------------------------------------------------------
-    let g_values = Array1::linspace(1.0, 2.0, 1);
+    let gp_values = Array1::linspace(0.001, 0.2, 2);
+    let gm_values = Array1::linspace(0.001, 0.2, 2);
     let omega_values = Array1::linspace(1.0, 5.0, 1);
 
     // Flatten parameters into a single vector of pairs (g, omega)
     let mut parameters = Vec::new();
-    for &g in &g_values {
-        for &omega in &omega_values {
-            parameters.push((g, omega));
+    for &gp in &gp_values {
+        for &gm in &gm_values {
+            for &omega in &omega_values {
+                parameters.push((gp, gm, omega));
+            }
         }
     }
 
@@ -1092,10 +1095,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // We parallelize over the parameters. 
     // IMPORTANT: Ensure build_lindbladian and compute_trace use SERIAL iterators now.
     let results: Vec<String> = parameters.par_iter()
-        .map(|&(g, omega)| {
-            let gamma_minus = 1.0;
-            let gamma_plus = g * gamma_minus;
-            
+        .map(|&(gp, gm, omega)| {
+            let gamma_minus = gm;
+            let gamma_plus = gp;
+
             // Build Lindbladian (This runs on a single thread now)
             let l_cal = build_lindbladian(l, &basis_states, q_sector, omega, gamma_plus, gamma_minus);
 
@@ -1127,7 +1130,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .collect::<Vec<String>>()
                 .join(", ");
 
-            format!("{}, {}, {}", g, omega, formatted_data)
+            format!("{},{},{},{}", gp, gm, omega, formatted_data)
         })
         .collect(); // Collect all results into a vector
 

@@ -4,7 +4,7 @@ import numpy as np
 
 # Load the dataset
 # Assuming header=None. If you have a header row, remove header=None
-df = pd.read_csv('../rust/occupation_time_10.csv', header=None)
+df = pd.read_csv('../rust/occupation_time.csv', header=None)
 
 dg = pd.read_csv('../rust/occupation.csv')
 
