@@ -13,7 +13,7 @@ dg = pd.read_csv('../rust/occupation.csv')
 fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(12, 12), sharex=True)
 
 # Iterate through each row in the dataframe
-for i in range(1,len(df)):
+for i in range(len(df)):
     gamma_plus = df.iloc[i, 0]
     gamma_minus = df.iloc[i, 1]
     omega = df.iloc[i, 2]
