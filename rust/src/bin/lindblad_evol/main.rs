@@ -976,15 +976,12 @@ fn obs_evolution(
     q_sector: i64,
     initial: &Array1<Complex64>,
     lindbladian: &Array2<Complex64>,
+    neel_idx: Option<usize>, // NEW: Pass the index safely
     dt: f64,
     t_final: f64,
-) -> Array1<(f64, f64)> {
-    // let n_matrix = occupation_number(l, basis_states, q_sector);
-
+) -> Array1<(f64, f64, f64)> { // UPDATED: Return 3 values
     let num_steps = (t_final / dt).round() as usize;
-
     let mut observables = Vec::with_capacity(num_steps + 1);
-    
     let mut current_rho = initial.clone();
 
     for _step in 0..=num_steps {
@@ -995,16 +992,23 @@ fn obs_evolution(
         let corr_state = corr_matrix.dot(&current_rho);
         let corr_val = compute_trace(l, basis_states, &corr_state, q_sector);
 
-        observables.push((expectation_val.re, corr_val.re));
+        // FIDELITY: O(1) coefficient lookup
+        let fidelity_val = neel_idx.map_or(0.0, |idx| current_rho[idx].re);
+
+        observables.push((expectation_val.re, corr_val.re, fidelity_val));
 
         let derivative = lindbladian.dot(&current_rho);
         current_rho = current_rho + &derivative * dt;
-        current_rho /= compute_trace(l, basis_states, &current_rho, q_sector);
+        
+        // Normalize
+        let trace = compute_trace(l, basis_states, &current_rho, q_sector);
+        if trace.norm() > 1e-15 {
+            current_rho /= trace;
+        }
     }
 
     Array1::from(observables)
 }
-
 // use itertools::iproduct; // Import this
 
 
@@ -1052,20 +1056,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // --- Initial State (Neel x Neel) ---
+// --- Initial State (Neel x Neel) ---
     let neel_key: u64 = (4u64.pow(l as u32 / 2) - 1) / 3;
     let mut rho_vec = Array1::<Complex64>::zeros(basis_states.len());
-
-    if let Some(idx) = basis_states.iter().position(|s| 
+    
+    // Capture the index safely
+    let neel_idx = basis_states.iter().position(|s| 
         s.states_a.contains(&neel_key) && s.states_b.contains(&neel_key)
-    ) {
+    );
+
+    if let Some(idx) = neel_idx {
         rho_vec[idx] = Complex64::new(1.0, 0.0);
         println!("Vectorized |Neel>x|Neel> placed at index: {}", idx);
     } else {
         println!("Néel state not found. Check if the k-sector allows it.");
     }
-
-    println!("Basis Dimension: {:}", basis_states.len());
 
     // --- Pre-compute Constant Matrices ---
     // These are read-only and shared across all threads
@@ -1119,14 +1124,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 &basis_states, 
                 q_sector, 
                 &rho_vec,       
-                &l_cal_dense,   
-                1e-4,         // dt
-                50.0            // t_final
+                &l_cal_dense,
+                neel_idx,       // PASS THE INDEX HERE
+                1e-4,         
+                50.0            
             );
 
-            // Format data into a CSV string immediately
+            // Add the 3rd variable to your output formatting
             let formatted_data = observables.iter()
-                .map(|(n, nn)| format!("{:.16}, {:.16}", n, nn))
+                .map(|(n, nn, fid)| format!("{:.16}, {:.16}, {:.16}", n, nn, fid))
                 .collect::<Vec<String>>()
                 .join(", ");
 

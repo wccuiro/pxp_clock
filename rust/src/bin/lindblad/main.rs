@@ -967,7 +967,7 @@ pub fn operator_entanglement_entropy(
 
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let l = 10;
+    let l = 8;
     let q_sector = 0;
     
     let basis = translationally_invariant_basis(l);
