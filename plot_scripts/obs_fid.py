@@ -132,4 +132,4 @@ def plot_normalized_dynamics(filename="occupation_time.csv", dt=1e-4):
 # Execute the plotters
 if __name__ == "__main__":
     plot_eigenvalue_overlaps("../rust/decay.csv")
-    plot_normalized_dynamics("../rust/occupation_time.csv", dt=1e-4)
+    plot_normalized_dynamics("../rust/occupation_time.csv", dt=1e-3)

@@ -26,7 +26,7 @@ def load_data(filename):
                             'gp':                 gp,
                             'gm':                 gm,
                             'omega':              omega,
-                            'decay_rate':        -float(raw_data[idx]),
+                            'decay_rate':         float(raw_data[idx]),
                             'energy_oscillation': float(raw_data[idx+1]),
                             'overlap':            float(raw_data[idx+2]),
                             'occupation':         float(raw_data[idx+3]),
@@ -72,7 +72,7 @@ def interactive_plot(df):
     plot1.setLabel('left',   'Overlap Magnitude')
     plot1.setLabel('bottom', 'Energy Oscillation  Im[λ]')
     plot2.setLabel('left',   'Overlap Magnitude')
-    plot2.setLabel('bottom', 'Decay Rate  −Re[λ]')
+    plot2.setLabel('bottom', 'Decay Rate  Re[λ]')
 
     # Compute global limits from full dataset
     e_min, e_max = df['energy_oscillation'].min(), df['energy_oscillation'].max()

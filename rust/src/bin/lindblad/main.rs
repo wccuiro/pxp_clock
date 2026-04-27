@@ -967,7 +967,7 @@ pub fn operator_entanglement_entropy(
 
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let l = 8;
+    let l = 10;
     let q_sector = 0;
     
     let basis = translationally_invariant_basis(l);
@@ -1032,17 +1032,46 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
 
-    // --- Initial State (Neel x Neel) ---
+// --- Initial State (Neel x Neel) ---
     let neel_key: u64 = (4u64.pow(l as u32 / 2) - 1) / 3;
     let mut rho_vec_neel = Array1::<Complex64>::zeros(basis_states.len());
 
-    if let Some(idx) = basis_states.iter().position(|s| 
-        s.states_a.contains(&neel_key) && s.states_b.contains(&neel_key)
-    ) {
-        rho_vec_neel[idx] = Complex64::new(1.0, 0.0);
-        println!("Vectorized |Neel>x|Neel> placed at index: {}", idx);
+    
+    // Find ALL indices where both states_a and states_b contain the neel_key
+    let all_neel_matches: Vec<(usize, &BasisState)> = basis_states
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| s.states_a.contains(&neel_key) && s.states_b.contains(&neel_key))
+        .collect();
+
+    println!("--- NEEL STATE SEARCH RESULTS ---");
+    println!("Total matches found: {}", all_neel_matches.len());
+    
+    for (idx, state) in &all_neel_matches {
+        println!("Index: {:>4} | Momentum (k): {:>2} | Norm_A: {:.4}", 
+                 idx, state.k, state.norm_a);
+    }
+    println!("---------------------------------");
+
+
+    // Find ALL indices where both states_a and states_b contain the neel_key
+    let neel_indices: Vec<usize> = basis_states
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| s.states_a.contains(&neel_key) && s.states_b.contains(&neel_key))
+        .map(|(i, _)| i)
+        .collect();
+
+    if !neel_indices.is_empty() {
+        // Distribute the population equally among the found momentum sectors
+        let initial_weight = 1.0 / neel_indices.len() as f64;
+        
+        for &idx in &neel_indices {
+            rho_vec_neel[idx] = Complex64::new(initial_weight, 0.0);
+            println!("Vectorized |Neel>x|Neel> placed at index: {} (Weight: {})", idx, initial_weight);
+        }
     } else {
-        println!("Néel state not found. Check if the k-sector allows it.");
+        println!("Néel state not found in any k-sector. Check if the sector allows it.");
     }
 
     let n_matrix = occupation_number(l, &basis_states, q_sector, &phases);

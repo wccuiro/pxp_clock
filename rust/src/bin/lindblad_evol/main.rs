@@ -976,10 +976,10 @@ fn obs_evolution(
     q_sector: i64,
     initial: &Array1<Complex64>,
     lindbladian: &Array2<Complex64>,
-    neel_idx: Option<usize>, // NEW: Pass the index safely
+    neel_indices: &[usize], // UPDATED: Pass the slice of all matching indices
     dt: f64,
     t_final: f64,
-) -> Array1<(f64, f64, f64)> { // UPDATED: Return 3 values
+) -> Array1<(f64, f64, f64)> {
     let num_steps = (t_final / dt).round() as usize;
     let mut observables = Vec::with_capacity(num_steps + 1);
     let mut current_rho = initial.clone();
@@ -992,8 +992,10 @@ fn obs_evolution(
         let corr_state = corr_matrix.dot(&current_rho);
         let corr_val = compute_trace(l, basis_states, &corr_state, q_sector);
 
-        // FIDELITY: O(1) coefficient lookup
-        let fidelity_val = neel_idx.map_or(0.0, |idx| current_rho[idx].re);
+        // FIDELITY: Sum the probabilities across all sectors where Neel resides
+        let fidelity_val: f64 = neel_indices.iter()
+            .map(|&idx| current_rho[idx].re)
+            .sum();
 
         observables.push((expectation_val.re, corr_val.re, fidelity_val));
 
@@ -1008,8 +1010,7 @@ fn obs_evolution(
     }
 
     Array1::from(observables)
-}
-// use itertools::iproduct; // Import this
+}// use itertools::iproduct; // Import this
 
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -1059,18 +1060,45 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 // --- Initial State (Neel x Neel) ---
     let neel_key: u64 = (4u64.pow(l as u32 / 2) - 1) / 3;
     let mut rho_vec = Array1::<Complex64>::zeros(basis_states.len());
-    
-    // Capture the index safely
-    let neel_idx = basis_states.iter().position(|s| 
-        s.states_a.contains(&neel_key) && s.states_b.contains(&neel_key)
-    );
 
-    if let Some(idx) = neel_idx {
-        rho_vec[idx] = Complex64::new(1.0, 0.0);
-        println!("Vectorized |Neel>x|Neel> placed at index: {}", idx);
-    } else {
-        println!("Néel state not found. Check if the k-sector allows it.");
+    
+    // Find ALL indices where both states_a and states_b contain the neel_key
+    let all_neel_matches: Vec<(usize, &BasisState)> = basis_states
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| s.states_a.contains(&neel_key) && s.states_b.contains(&neel_key))
+        .collect();
+
+    println!("--- NEEL STATE SEARCH RESULTS ---");
+    println!("Total matches found: {}", all_neel_matches.len());
+    
+    for (idx, state) in &all_neel_matches {
+        println!("Index: {:>4} | Momentum (k): {:>2} | Norm_A: {:.4}", 
+                 idx, state.k, state.norm_a);
     }
+    println!("---------------------------------");
+
+
+    // Find ALL indices where both states_a and states_b contain the neel_key
+    let neel_indices: Vec<usize> = basis_states
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| s.states_a.contains(&neel_key) && s.states_b.contains(&neel_key))
+        .map(|(i, _)| i)
+        .collect();
+
+    if !neel_indices.is_empty() {
+        // Distribute the population equally among the found momentum sectors
+        let initial_weight = 1.0 / neel_indices.len() as f64;
+        
+        for &idx in &neel_indices {
+            rho_vec[idx] = Complex64::new(initial_weight, 0.0);
+            println!("Vectorized |Neel>x|Neel> placed at index: {} (Weight: {})", idx, initial_weight);
+        }
+    } else {
+        println!("Néel state not found in any k-sector. Check if the sector allows it.");
+    }
+
 
     // --- Pre-compute Constant Matrices ---
     // These are read-only and shared across all threads
@@ -1082,7 +1110,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ----------------------------------------------------------------
     let gp_values = Array1::linspace(0.001, 0.2, 2);
     let gm_values = Array1::linspace(0.001, 0.2, 2);
-    let omega_values = Array1::linspace(1.0, 5.0, 1);
+    let omega_values = Array1::linspace(1.0, 2.0, 1);
 
     // Flatten parameters into a single vector of pairs (g, omega)
     let mut parameters = Vec::new();
@@ -1125,9 +1153,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 q_sector, 
                 &rho_vec,       
                 &l_cal_dense,
-                neel_idx,       // PASS THE INDEX HERE
-                1e-4,         
-                50.0            
+                &neel_indices,       // PASS THE INDICES HERE
+                1e-3,         
+                10.0            
             );
 
             // Add the 3rd variable to your output formatting
