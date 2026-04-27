@@ -976,7 +976,7 @@ fn obs_evolution(
     q_sector: i64,
     initial: &Array1<Complex64>,
     lindbladian: &Array2<Complex64>,
-    neel_indices: &[usize], // UPDATED: Pass the slice of all matching indices
+    neel_indices: &[usize], 
     dt: f64,
     t_final: f64,
 ) -> Array1<(f64, f64, f64)> {
@@ -985,16 +985,15 @@ fn obs_evolution(
     let mut current_rho = initial.clone();
 
     for _step in 0..=num_steps {
-        
         let obs_state = n_matrix.dot(&current_rho);
         let expectation_val = compute_trace(l, basis_states, &obs_state, q_sector);
         
         let corr_state = corr_matrix.dot(&current_rho);
         let corr_val = compute_trace(l, basis_states, &corr_state, q_sector);
 
-        // FIDELITY: Sum the probabilities across all sectors where Neel resides
+        // FIDELITY: Dot product against the initial state weights
         let fidelity_val: f64 = neel_indices.iter()
-            .map(|&idx| current_rho[idx].re)
+            .map(|&idx| initial[idx].re * current_rho[idx].re)
             .sum();
 
         observables.push((expectation_val.re, corr_val.re, fidelity_val));
@@ -1002,7 +1001,7 @@ fn obs_evolution(
         let derivative = lindbladian.dot(&current_rho);
         current_rho = current_rho + &derivative * dt;
         
-        // Normalize
+        // Normalize (Will naturally skip Q=pi because compute_trace returns 0 for Q!=0)
         let trace = compute_trace(l, basis_states, &current_rho, q_sector);
         if trace.norm() > 1e-15 {
             current_rho /= trace;
@@ -1010,17 +1009,16 @@ fn obs_evolution(
     }
 
     Array1::from(observables)
-}// use itertools::iproduct; // Import this
-
+}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ----------------------------------------------------------------
     // 1. SYSTEM SETUP (Single Threaded / Setup Phase)
     // ----------------------------------------------------------------
     let l = 10;
-    let q_sector = 0;
+    let _q_sector = 0;
     
-    // --- Basis Construction ---
+// --- Basis Construction ---
     let basis = translationally_invariant_basis(l);    
     
     let mut basis_per_sector: HashMap<i64, Vec<u64>> = HashMap::new();
@@ -1035,75 +1033,61 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     
-    let mut basis_states = Vec::new();
-    for k in 0..l as i64 {
-        if let Some(states_in_sector) = basis_per_sector.get(&k) {
-            for &state_a in states_in_sector {
-                for &state_b in states_in_sector {
-                    let states_a = basis.rep_index.get(&state_a).unwrap().clone();
-                    let states_b = basis.rep_index.get(&state_b).unwrap().clone();
-                    let norm_a = normalization_factor(l, &states_a, k);
-                    let norm_b = normalization_factor(l, &states_b, k);
-                    
-                    basis_states.push(BasisState {
-                        states_a,
-                        states_b,
-                        k,
-                        norm_a,
-                        norm_b,
-                    });
+    // Define a closure to build the basis and matrices for a specific Q-sector
+    let build_sector = |q_sector: i64| {
+        let mut basis_states = Vec::new();
+        for k_a in 0..l as i64 {
+            // Decouple ket and bra momentum
+            let k_b = (k_a - q_sector).rem_euclid(l as i64);
+            
+            if let (Some(states_in_a), Some(states_in_b)) = (basis_per_sector.get(&k_a), basis_per_sector.get(&k_b)) {
+                for &state_a in states_in_a {
+                    for &state_b in states_in_b {
+                        let states_a_vec = basis.rep_index.get(&state_a).unwrap().clone();
+                        let states_b_vec = basis.rep_index.get(&state_b).unwrap().clone();
+                        let norm_a = normalization_factor(l, &states_a_vec, k_a);
+                        let norm_b = normalization_factor(l, &states_b_vec, k_b); // Correctly normalize k_b
+                        
+                        basis_states.push(BasisState {
+                            states_a: states_a_vec,
+                            states_b: states_b_vec,
+                            k: k_a, // Preserved as 'k' so build_lindbladian continues to work unmodified
+                            norm_a,
+                            norm_b,
+                        });
+                    }
                 }
             }
         }
-    }
 
-// --- Initial State (Neel x Neel) ---
-    let neel_key: u64 = (4u64.pow(l as u32 / 2) - 1) / 3;
-    let mut rho_vec = Array1::<Complex64>::zeros(basis_states.len());
-
-    
-    // Find ALL indices where both states_a and states_b contain the neel_key
-    let all_neel_matches: Vec<(usize, &BasisState)> = basis_states
-        .iter()
-        .enumerate()
-        .filter(|(_, s)| s.states_a.contains(&neel_key) && s.states_b.contains(&neel_key))
-        .collect();
-
-    println!("--- NEEL STATE SEARCH RESULTS ---");
-    println!("Total matches found: {}", all_neel_matches.len());
-    
-    for (idx, state) in &all_neel_matches {
-        println!("Index: {:>4} | Momentum (k): {:>2} | Norm_A: {:.4}", 
-                 idx, state.k, state.norm_a);
-    }
-    println!("---------------------------------");
-
-
-    // Find ALL indices where both states_a and states_b contain the neel_key
-    let neel_indices: Vec<usize> = basis_states
-        .iter()
-        .enumerate()
-        .filter(|(_, s)| s.states_a.contains(&neel_key) && s.states_b.contains(&neel_key))
-        .map(|(i, _)| i)
-        .collect();
-
-    if !neel_indices.is_empty() {
-        // Distribute the population equally among the found momentum sectors
-        let initial_weight = 1.0 / neel_indices.len() as f64;
+        let neel_key: u64 = (4u64.pow(l as u32 / 2) - 1) / 3;
+        let mut rho_vec = Array1::<Complex64>::zeros(basis_states.len());
         
-        for &idx in &neel_indices {
-            rho_vec[idx] = Complex64::new(initial_weight, 0.0);
-            println!("Vectorized |Neel>x|Neel> placed at index: {} (Weight: {})", idx, initial_weight);
+        let neel_indices: Vec<usize> = basis_states
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| s.states_a.contains(&neel_key) && s.states_b.contains(&neel_key))
+            .map(|(i, _)| i)
+            .collect();
+
+        if !neel_indices.is_empty() {
+            let initial_weight = 1.0 / neel_indices.len() as f64;
+            for &idx in &neel_indices {
+                rho_vec[idx] = Complex64::new(initial_weight, 0.0);
+            }
         }
-    } else {
-        println!("Néel state not found in any k-sector. Check if the sector allows it.");
-    }
 
+        let n_matrix = occupation_number(l, &basis_states, q_sector);
+        let corr_matrix = density_correlation_nnn(l, &basis_states, q_sector);
 
-    // --- Pre-compute Constant Matrices ---
-    // These are read-only and shared across all threads
-    let n_matrix = occupation_number(l, &basis_states, q_sector);
-    let corr_matrix = density_correlation_nnn(l, &basis_states, q_sector);
+        (basis_states, n_matrix, corr_matrix, rho_vec, neel_indices)
+    };
+
+    // Precompute both Liouvillian momentum sectors required for the Néel quench
+    let (basis_0, n_mat_0, corr_mat_0, rho_0, neel_idx_0) = build_sector(0);
+    let q_pi = (l / 2) as i64;
+    let (basis_pi, n_mat_pi, corr_mat_pi, rho_pi, neel_idx_pi) = build_sector(q_pi);
+
 
     // ----------------------------------------------------------------
     // 2. PARAMETER SWEEP PREPARATION
@@ -1127,46 +1111,47 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ----------------------------------------------------------------
     // We parallelize over the parameters. 
     // IMPORTANT: Ensure build_lindbladian and compute_trace use SERIAL iterators now.
+// ----------------------------------------------------------------
+    // 3. PARALLEL EVOLUTION
+    // ----------------------------------------------------------------
     let results: Vec<String> = parameters.par_iter()
         .map(|&(gp, gm, omega)| {
             let gamma_minus = gm;
             let gamma_plus = gp;
 
-            // Build Lindbladian (This runs on a single thread now)
-            let l_cal = build_lindbladian(l, &basis_states, q_sector, omega, gamma_plus, gamma_minus);
-
-            // Convert sparse to dense (if needed by your solver)
-            let l_cal_dense = {
-                let mut dense = Array2::<Complex64>::zeros((basis_states.len(), basis_states.len()));
-                for (val, (row, col)) in l_cal.iter() {
-                    dense[[row, col]] = *val;
-                }
+            // --- Q = 0 Sector (Populations) ---
+            let l_cal_0 = build_lindbladian(l, &basis_0, 0, omega, gamma_plus, gamma_minus);
+            let l_cal_dense_0 = {
+                let mut dense = Array2::<Complex64>::zeros((basis_0.len(), basis_0.len()));
+                for (val, (row, col)) in l_cal_0.iter() { dense[[row, col]] = *val; }
                 dense
             };
+            let obs_0 = obs_evolution(l, &n_mat_0, &corr_mat_0, &basis_0, 0, &rho_0, &l_cal_dense_0, &neel_idx_0, 1e-3, 10.0);
 
-            // Run Time Evolution (This runs on a single thread now)
-            let observables = obs_evolution(
-                l,
-                &n_matrix,
-                &corr_matrix, 
-                &basis_states, 
-                q_sector, 
-                &rho_vec,       
-                &l_cal_dense,
-                &neel_indices,       // PASS THE INDICES HERE
-                1e-3,         
-                10.0            
-            );
+            // --- Q = Pi Sector (Coherences) ---
+            let l_cal_pi = build_lindbladian(l, &basis_pi, q_pi, omega, gamma_plus, gamma_minus);
+            let l_cal_dense_pi = {
+                let mut dense = Array2::<Complex64>::zeros((basis_pi.len(), basis_pi.len()));
+                for (val, (row, col)) in l_cal_pi.iter() { dense[[row, col]] = *val; }
+                dense
+            };
+            let obs_pi = obs_evolution(l, &n_mat_pi, &corr_mat_pi, &basis_pi, q_pi, &rho_pi, &l_cal_dense_pi, &neel_idx_pi, 1e-3, 10.0);
 
-            // Add the 3rd variable to your output formatting
-            let formatted_data = observables.iter()
+            // --- Construct Interference Sum ---
+            let total_obs: Vec<(f64, f64, f64)> = obs_0.iter().zip(obs_pi.iter())
+                .map(|(o0, opi)| {
+                    (o0.0 + opi.0, o0.1 + opi.1, o0.2 + opi.2)
+                }).collect();
+
+            let formatted_data = total_obs.iter()
                 .map(|(n, nn, fid)| format!("{:.16}, {:.16}, {:.16}", n, nn, fid))
                 .collect::<Vec<String>>()
                 .join(", ");
 
             format!("{},{},{},{}", gp, gm, omega, formatted_data)
         })
-        .collect(); // Collect all results into a vector
+        .collect();
+
 
     // ----------------------------------------------------------------
     // 4. FILE OUTPUT (Sequential)
