@@ -1,4 +1,4 @@
-use ndarray::{Array1,Array2,s};
+use ndarray::{Array1,Array2};
 use ndarray_linalg::{Eig, Eigh, SVD};
 use num_complex::Complex64;
 use rayon::prelude::*;
@@ -968,7 +968,7 @@ pub fn operator_entanglement_entropy(
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let l = 10;
-    let q_sector = 0;
+    let _q_sector = 0;
     
     let basis = translationally_invariant_basis(l);
     let phases = precompute_phases(l);
@@ -985,32 +985,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     
-    let mut basis_states = Vec::new();
-    for k in 0..l as i64 {
-        if let Some(states_in_sector) = basis_per_sector.get(&k) {
-            for &state_a in states_in_sector {
-                for &state_b in states_in_sector {
-                    let states_a = basis.rep_index.get(&state_a).unwrap().clone();
-                    let states_b = basis.rep_index.get(&state_b).unwrap().clone();
-                    let norm_a = normalization_factor(l, &states_a, k, &phases);
-                    let norm_b = normalization_factor(l, &states_b, k, &phases);
-                    
-                    basis_states.push(BasisState {
-                        states_a,
-                        states_b,
-                        k,
-                        norm_a,
-                        norm_b,
-                    });
-                }
-            }
-        }
-    }
-
-    println!("Total basis states in Q=0 sector: {}", basis_states.len());
-    
-    let gp_values = Array1::linspace(0.001, 0.2, 2);
-    let gm_values = Array1::linspace(0.001, 0.2, 2);
+    let gp_values = Array1::linspace(0.5, 0.2, 1);
+    let gm_values = Array1::linspace(0.25, 0.2, 1);
     let omega_values = Array1::linspace(1.0, 2.0, 1);
 
     // let raw_space = Array1::linspace(0.5, 1.0, 3);
@@ -1031,52 +1007,58 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-
-// --- Initial State (Neel x Neel) ---
-    let neel_key: u64 = (4u64.pow(l as u32 / 2) - 1) / 3;
-    let mut rho_vec_neel = Array1::<Complex64>::zeros(basis_states.len());
-
-    
-    // Find ALL indices where both states_a and states_b contain the neel_key
-    let all_neel_matches: Vec<(usize, &BasisState)> = basis_states
-        .iter()
-        .enumerate()
-        .filter(|(_, s)| s.states_a.contains(&neel_key) && s.states_b.contains(&neel_key))
-        .collect();
-
-    println!("--- NEEL STATE SEARCH RESULTS ---");
-    println!("Total matches found: {}", all_neel_matches.len());
-    
-    for (idx, state) in &all_neel_matches {
-        println!("Index: {:>4} | Momentum (k): {:>2} | Norm_A: {:.4}", 
-                 idx, state.k, state.norm_a);
-    }
-    println!("---------------------------------");
-
-
-    // Find ALL indices where both states_a and states_b contain the neel_key
-    let neel_indices: Vec<usize> = basis_states
-        .iter()
-        .enumerate()
-        .filter(|(_, s)| s.states_a.contains(&neel_key) && s.states_b.contains(&neel_key))
-        .map(|(i, _)| i)
-        .collect();
-
-    if !neel_indices.is_empty() {
-        // Distribute the population equally among the found momentum sectors
-        let initial_weight = 1.0 / neel_indices.len() as f64;
-        
-        for &idx in &neel_indices {
-            rho_vec_neel[idx] = Complex64::new(initial_weight, 0.0);
-            println!("Vectorized |Neel>x|Neel> placed at index: {} (Weight: {})", idx, initial_weight);
+    // Define a closure to build the basis, initial state, and matrices for a specific Q-sector
+    let build_sector = |q_sector: i64| {
+        let mut basis_states = Vec::new();
+        for k_a in 0..l as i64 {
+            // Decouple ket and bra momentum
+            let k_b = (k_a - q_sector).rem_euclid(l as i64);
+            
+            if let (Some(states_in_a), Some(states_in_b)) = (basis_per_sector.get(&k_a), basis_per_sector.get(&k_b)) {
+                for &state_a in states_in_a {
+                    for &state_b in states_in_b {
+                        let states_a_vec = basis.rep_index.get(&state_a).unwrap().clone();
+                        let states_b_vec = basis.rep_index.get(&state_b).unwrap().clone();
+                        
+                        let norm_a = normalization_factor(l, &states_a_vec, k_a, &phases);
+                        let norm_b = normalization_factor(l, &states_b_vec, k_b, &phases); // Correctly normalize k_b
+                        
+                        basis_states.push(BasisState {
+                            states_a: states_a_vec,
+                            states_b: states_b_vec,
+                            k: k_a, // Kept as k_a so build_lindbladian works without changes
+                            norm_a,
+                            norm_b,
+                        });
+                    }
+                }
+            }
         }
-    } else {
-        println!("Néel state not found in any k-sector. Check if the sector allows it.");
-    }
 
-    let n_matrix = occupation_number(l, &basis_states, q_sector, &phases);
-    let corr_matrix = density_correlation_nnn(l, &basis_states, q_sector, &phases);
+        let neel_key: u64 = (4u64.pow(l as u32 / 2) - 1) / 3;
+        let mut rho_vec_neel = Array1::<Complex64>::zeros(basis_states.len());
+        
+        let neel_indices: Vec<usize> = basis_states.iter().enumerate()
+            .filter(|(_, s)| s.states_a.contains(&neel_key) && s.states_b.contains(&neel_key))
+            .map(|(i, _)| i).collect();
 
+        if !neel_indices.is_empty() {
+            let initial_weight = 1.0 / neel_indices.len() as f64;
+            for &idx in &neel_indices {
+                rho_vec_neel[idx] = Complex64::new(initial_weight, 0.0);
+            }
+        }
+
+        let n_matrix = occupation_number(l, &basis_states, q_sector, &phases);
+        let corr_matrix = density_correlation_nnn(l, &basis_states, q_sector, &phases);
+
+        (basis_states, rho_vec_neel, n_matrix, corr_matrix)
+    };
+
+    // Precompute both Q=0 and Q=pi sectors before the heavy lifting
+    let q_pi = (l / 2) as i64;
+    let (basis_0, rho_0, n_mat_0, corr_mat_0) = build_sector(0);
+    let (basis_pi, rho_pi, n_mat_pi, corr_mat_pi) = build_sector(q_pi);
 
     println!("Starting parallel sweep over {} points...", parameters.len());
 
@@ -1084,7 +1066,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let results: Vec<SimulationResult> = parameters
         .par_iter()
         .map(|&(gp, gm, omega)| {
-            // A. Setup Buffers for Output
             let mut res = SimulationResult {
                 occupation_str: String::new(),
                 std_eigenvalues_str: String::new(),
@@ -1093,99 +1074,89 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 oee_str: String::new(),
             };
 
-            // B. Build Matrix (Directly Dense)
-            // Allocates ~2.2GB for L=12
+            // Process both Q=0 and Q=pi sequentially within this thread
+            let sectors = [
+                (0, &basis_0, &rho_0, &n_mat_0, &corr_mat_0),
+                (q_pi, &basis_pi, &rho_pi, &n_mat_pi, &corr_mat_pi)
+            ];
 
-            let gamma_minus = gm;
-            let gamma_plus = gp;
-            // let mut l_mat = Array2::<Complex64>::zeros((basis_states.len(), basis_states.len()));
-            
-            // // Call the SERIAL builder
-            // build_lindbladian_serial(l, &basis_states, &mut l_mat, q_sector, omega, gamma_plus, gamma_minus, &phases);
-
-            let l_cal = build_lindbladian(l, &basis_states, q_sector, omega, gamma_plus, gamma_minus, &phases);
-
-            let l_cal_dense = {
-                let mut dense = Array2::<Complex64>::zeros((basis_states.len(), basis_states.len()));
-                for (val, (row, col)) in l_cal.iter() {
-                    dense[[row, col]] = *val;
-                }
-                dense
-            };
-
-            // C. Diagonalize
-            if let Ok((evals, evecs)) = l_cal_dense.eig() {
+            for (q_sector, basis_states, rho_vec_neel, n_matrix, corr_matrix) in sectors {
+                let l_cal = build_lindbladian(l, basis_states, q_sector, omega, gp, gm, &phases);
                 
-                res.oee_str.push_str(&format!("{},{},{}", gp, gm, omega));
-
-                for (&lambda, vec_view) in evals.iter().zip(evecs.columns()) {
-                    // Safely extract the contiguous vector
-                    let vec_contiguous = vec_view.to_vec();
-                    
-                    // Expand and compute
-                    let expanded = expand_eigenmatrix(l, &basis_states, &vec_contiguous, &phases);
-                    let entropy = operator_entanglement_entropy(&expanded, l).unwrap_or(0.0);
-                    
-                    // Append the triplet (Re[eval], Im[eval], OEE) continuously to the same line
-                    res.oee_str.push_str(&format!(",{:.10},{:.10},{:.6}", lambda.re, lambda.im, entropy));
-                }
-                // Terminate the row for this parameter combination
-                res.oee_str.push('\n');
-
-                // --- 1. Decay Analysis ---
-                if let Ok(analysis) = analyze_lindbladian(&evals, &evecs, &n_matrix, &rho_vec_neel, 1e-6) {
-                    res.decay_str.push_str(&format!("{},{},{}", gp, gm, omega)); 
-                    for data in analysis {
-                        res.decay_str.push_str(&format!(",{:.10},{:.10},{:.10},{},{}", 
-                            data.real_eigenvalue, data.imag_eigenvalue, data.overlap, data.occupation, data.block_size));
+                let l_cal_dense = {
+                    let mut dense = Array2::<Complex64>::zeros((basis_states.len(), basis_states.len()));
+                    for (val, (row, col)) in l_cal.iter() {
+                        dense[[row, col]] = *val;
                     }
-                    res.decay_str.push('\n');
-                }                
+                    dense
+                };
 
-                // --- 2. Eigenvalues Dump ---
-                res.eigenvalues_str.push_str(&format!("{},{},{}", gp, gm, omega));
-                for (_i, eval) in evals.iter().enumerate() {
-                    res.eigenvalues_str.push_str(&format!(",{},{}", eval.re, eval.im));
-                }
-                res.eigenvalues_str.push('\n');
+                if let Ok((evals, evecs)) = l_cal_dense.eig() {
+                    
+                    // OEE Dump
+                    res.oee_str.push_str(&format!("{},{},{},{}", q_sector, gp, gm, omega));
+                    for (&lambda, vec_view) in evals.iter().zip(evecs.columns()) {
+                        let vec_contiguous = vec_view.to_vec();
+                        let expanded = expand_eigenmatrix(l, basis_states, &vec_contiguous, &phases);
+                        let entropy = operator_entanglement_entropy(&expanded, l).unwrap_or(0.0);
+                        res.oee_str.push_str(&format!(",{:.10},{:.10},{:.6}", lambda.re, lambda.im, entropy));
+                    }
+                    res.oee_str.push('\n');
 
-                // --- 3. Steady State Analysis ---
-                for (i, eval) in evals.iter().enumerate() {
-                    if eval.re.abs() < 1e-8 && eval.im.abs() < 1e-8 {
-                        let rho_vec = evecs.column(i).to_owned();
+                    // Decay & Overlap Analysis
+                    if let Ok(analysis) = analyze_lindbladian(&evals, &evecs, n_matrix, rho_vec_neel, 1e-6) {
+                        res.decay_str.push_str(&format!("{},{},{},{}", q_sector, gp, gm, omega)); 
+                        for data in analysis {
+                            res.decay_str.push_str(&format!(",{:.10},{:.10},{:.10},{},{}", 
+                                data.real_eigenvalue, data.imag_eigenvalue, data.overlap, data.occupation, data.block_size));
+                        }
+                        res.decay_str.push('\n');
+                    }                
 
-                        // Std Eigenvalues
-                        let spectrum_data = steady_state_properties(l, &basis_states, &rho_vec);
-                        let formatted_data = spectrum_data.iter()
-                            .map(|(p, n)| format!("{:.16}, {:.6}", p, n))
-                            .collect::<Vec<String>>()
-                            .join(", ");
-                        res.std_eigenvalues_str.push_str(&format!("{},{},{},{}\n", gp, gm, omega, formatted_data));
+                    // Raw Eigenvalues Dump
+                    res.eigenvalues_str.push_str(&format!("{},{},{},{}", q_sector, gp, gm, omega));
+                    for eval in evals.iter() {
+                        res.eigenvalues_str.push_str(&format!(",{},{}", eval.re, eval.im));
+                    }
+                    res.eigenvalues_str.push('\n');
 
-                        // Occupation
-                        let tr_rho = compute_trace(l, &basis_states, &rho_vec, q_sector, &phases);
-                        let n_rho = n_matrix.dot(&rho_vec);
-                        let nn_rho = corr_matrix.dot(&rho_vec); // Using corr_matrix from outer scope is fine (read-only)
-                        
-                        let tr_n = compute_trace(l, &basis_states, &n_rho, q_sector, &phases);
-                        let tr_nn = compute_trace(l, &basis_states, &nn_rho, q_sector, &phases);
+                    // Steady State Analysis
+                    for (i, eval) in evals.iter().enumerate() {
+                        if eval.re.abs() < 1e-8 && eval.im.abs() < 1e-8 {
+                            let rho_vec = evecs.column(i).to_owned();
+                            let tr_rho = compute_trace(l, basis_states, &rho_vec, q_sector, &phases);
+                            
+                            // IMPORTANT: The compute_trace mathematically returns 0.0 for Q=pi. 
+                            // This guarantees Q=pi correctly skips the Steady State logic below.
+                            if tr_rho.norm() > 1e-10 {
+                                let spectrum_data = steady_state_properties(l, basis_states, &rho_vec);
+                                let formatted_data = spectrum_data.iter()
+                                    .map(|(p, n)| format!("{:.16}, {:.6}", p, n))
+                                    .collect::<Vec<String>>()
+                                    .join(", ");
+                                res.std_eigenvalues_str.push_str(&format!("{},{},{},{},{}\n", q_sector, gp, gm, omega, formatted_data));
 
-                        if tr_rho.norm() > 1e-10 {
-                            let exp_n = (tr_n / tr_rho).re;
-                            let exp_nn = (tr_nn / tr_rho).re;
-                            res.occupation_str.push_str(&format!("{},{},{},{},{}\n", gp, gm, omega, exp_n, exp_nn));
+                                let n_rho = n_matrix.dot(&rho_vec);
+                                let nn_rho = corr_matrix.dot(&rho_vec);
+                                
+                                let tr_n = compute_trace(l, basis_states, &n_rho, q_sector, &phases);
+                                let tr_nn = compute_trace(l, basis_states, &nn_rho, q_sector, &phases);
+
+                                let exp_n = (tr_n / tr_rho).re;
+                                let exp_nn = (tr_nn / tr_rho).re;
+                                res.occupation_str.push_str(&format!("{},{},{},{},{},{}\n", q_sector, gp, gm, omega, exp_n, exp_nn));
+                            }
                         }
                     }
                 }
             }
-            // l_mat is dropped here, freeing RAM
             res
         })
         .collect();
 
     // 2. WRITE TO FILES (After loop, safe and fast)
     let mut file_occupation = File::create("occupation.csv")?;
-    writeln!(file_occupation, "gp,gm,omega,n,nn")?;
+    writeln!(file_occupation, "q_sector,gp,gm,omega,n,nn")?;
     
     let mut file_std = File::create("std_eigenvalues.csv")?;
     let mut file_evals = File::create("eigenvalues.csv")?;

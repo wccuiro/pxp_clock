@@ -1,45 +1,71 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
+import numpy as np
+import matplotlib.pyplot as plt
+from collections import defaultdict
+
 def plot_eigenvalue_overlaps(filename="decay.csv"):
-    """Plots Overlap vs Real and Imaginary parts of the eigenvalues, one figure per parameter set."""
+    """Plots Overlap vs Real and Imaginary parts of the eigenvalues, grouping sectors by parameter set."""
+    # Dictionary to group data. Key: (gp, gm, omega), Value: list of sector data
+    grouped_data = defaultdict(list)
+    
     try:
+        # Step 1: Read and group the data
         with open(filename, 'r') as f:
             for line in f:
                 vals = line.strip().split(',')
                 if len(vals) < 4: 
                     continue
                 
-                gp, gm, omega = float(vals[0]), float(vals[1]), float(vals[2])
+                sector, gp, gm, omega = float(vals[0]), float(vals[1]), float(vals[2]), float(vals[3])
                 
                 # Reshape into blocks of 5: [Re, Im, Overlap, Occ, Block]
-                data = np.array(vals[3:], dtype=float).reshape(-1, 5)
+                data = np.array(vals[4:], dtype=float).reshape(-1, 5)
                 
-                real_evals = data[:, 0]
-                imag_evals = data[:, 1]
-                overlaps = data[:, 2]
+                # Store the extracted arrays in the dictionary under their parameter key
+                grouped_data[(gp, gm, omega)].append({
+                    'sector': sector,
+                    'real': data[:, 0],
+                    'imag': data[:, 1],
+                    'overlaps': data[:, 2]
+                })
                 
-                # Create a new figure specifically for THIS parameter set
-                fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
-                fig.suptitle(f"Eigenspectrum Overlaps: gp={gp}, gm={gm}, $\\omega$={omega}", fontsize=14, fontweight='bold')
+        # Step 2: Generate one figure per parameter set
+        for (gp, gm, omega), sector_list in grouped_data.items():
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
+            fig.suptitle(f"Eigenspectrum Overlaps: gp={gp}, gm={gm}, $\\omega$={omega}", fontsize=14, fontweight='bold')
+            
+            # Sort by sector to keep legend order consistent across plots
+            sector_list.sort(key=lambda x: x['sector'])
+            
+            for s_data in sector_list:
+                sec_val = s_data['sector']
                 
                 # Plot 1: Real vs Overlap
-                ax1.scatter(real_evals, overlaps, alpha=0.7, color='blue', edgecolors='w', linewidth=0.5)
-                ax1.set_xlabel("Real(Eigenvalue)")
-                ax1.set_ylabel("Overlap")
-                ax1.grid(True, alpha=0.3)
+                ax1.scatter(s_data['real'], s_data['overlaps'], alpha=0.7, edgecolors='w', linewidth=0.5, label=f"Sector {sec_val}")
                 
                 # Plot 2: Imaginary vs Overlap
-                ax2.scatter(imag_evals, overlaps, alpha=0.7, color='red', edgecolors='w', linewidth=0.5)
-                ax2.set_xlabel("Imaginary(Eigenvalue)")
-                ax2.set_ylabel("Overlap")
-                ax2.grid(True, alpha=0.3)
-                
-                plt.tight_layout()
-                plt.show()
+                ax2.scatter(s_data['imag'], s_data['overlaps'], alpha=0.7, edgecolors='w', linewidth=0.5, label=f"Sector {sec_val}")
+            
+            # Formatting for Real plot
+            ax1.set_xlabel("Real(Eigenvalue)")
+            ax1.set_ylabel("Overlap")
+            ax1.grid(True, alpha=0.3)
+            ax1.legend()
+            
+            # Formatting for Imaginary plot
+            ax2.set_xlabel("Imaginary(Eigenvalue)")
+            ax2.set_ylabel("Overlap")
+            ax2.grid(True, alpha=0.3)
+            ax2.legend()
+            
+            plt.tight_layout()
+            plt.show()
                 
     except FileNotFoundError:
         print(f"File {filename} not found.")
+
 
 def plot_normalized_dynamics(filename="occupation_time.csv", dt=1e-4):
     """Plots the normalized observables grouped by observable to compare parameter sets."""
