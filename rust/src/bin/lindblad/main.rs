@@ -834,6 +834,37 @@ struct SimulationResult {
 // ENTANGLEMENT ENTROPY FUNCTIONS
 // ==========================================
 
+/// Computes the positive semi-definite operator \rho^\dagger \rho from a sparse 
+/// eigenmatrix represented as a list of (ket, bra, coefficient).
+fn compute_rho_dagger_rho(
+    expanded_state: &[(u64, u64, Complex64)]
+) -> Vec<(u64, u64, Complex64)> {
+    // Group terms by their 'ket' (a). 
+    // For \rho^\dagger \rho = \sum_{a,b,b'} c_{a,b}^* c_{a,b'} |b><b'|
+    let mut a_groups: HashMap<u64, Vec<(u64, Complex64)>> = HashMap::new();
+    for &(a, b, c) in expanded_state {
+        a_groups.entry(a).or_default().push((b, c));
+    }
+
+    let mut rho_sq_map: HashMap<(u64, u64), Complex64> = HashMap::new();
+
+    for b_list in a_groups.values() {
+        for &(b, c_ab) in b_list {
+            for &(b_prime, c_ab_prime) in b_list {
+                // |b><b'| term coefficient
+                let coeff = c_ab.conj() * c_ab_prime;
+                *rho_sq_map.entry((b, b_prime)).or_insert(Complex64::new(0.0, 0.0)) += coeff;
+            }
+        }
+    }
+
+    // Convert back to sparse format, filtering out numerical zeros
+    rho_sq_map.into_iter()
+        .filter(|(_, c)| c.norm() > 1e-12)
+        .map(|((b, b_prime), c)| (b, b_prime, c))
+        .collect()
+}
+
 /// Expands a Q=0 eigenmatrix into the doubled real-space basis.
 /// CRITICAL: Implements the exp(i*k*(j + j')) phase required for OEE vectorization.
 fn expand_eigenmatrix(
@@ -985,8 +1016,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     
-    let gp_values = Array1::linspace(0.5, 0.2, 1);
-    let gm_values = Array1::linspace(0.25, 0.2, 1);
+    let gp_values = Array1::linspace(0.001, 0.2, 2);
+    let gm_values = Array1::linspace(0.001, 0.2, 2);
     let omega_values = Array1::linspace(1.0, 2.0, 1);
 
     // let raw_space = Array1::linspace(0.5, 1.0, 3);
@@ -1093,15 +1124,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 if let Ok((evals, evecs)) = l_cal_dense.eig() {
                     
-                    // OEE Dump
+// OEE Dump
                     res.oee_str.push_str(&format!("{},{},{},{}", q_sector, gp, gm, omega));
                     for (&lambda, vec_view) in evals.iter().zip(evecs.columns()) {
                         let vec_contiguous = vec_view.to_vec();
+                        
+                        // 1. Expand to the real-space sparse representation
                         let expanded = expand_eigenmatrix(l, basis_states, &vec_contiguous, &phases);
-                        let entropy = operator_entanglement_entropy(&expanded, l).unwrap_or(0.0);
+                        
+                        // 2. Compute the physically meaningful \rho^\dagger \rho
+                        let rho_sq = compute_rho_dagger_rho(&expanded);
+                        
+                        // 3. Compute OEE of the new positive semi-definite operator
+                        let entropy = operator_entanglement_entropy(&rho_sq, l).unwrap_or(0.0);
+                        
                         res.oee_str.push_str(&format!(",{:.10},{:.10},{:.6}", lambda.re, lambda.im, entropy));
                     }
                     res.oee_str.push('\n');
+
 
                     // Decay & Overlap Analysis
                     if let Ok(analysis) = analyze_lindbladian(&evals, &evecs, n_matrix, rho_vec_neel, 1e-6) {

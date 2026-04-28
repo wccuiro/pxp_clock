@@ -1,145 +1,135 @@
+import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.widgets import Slider
-import sys
-import os
 
-def load_data(filename):
-    """
-    Parses the variable-length CSV where each row is:
-    gp, gm, omega, re1, im1, oee1, re2, im2, oee2, ...
-    """
-    if not os.path.exists(filename):
-        print(f"Error: File '{filename}' not found.")
-        sys.exit(1)
+# 1. Load the 12-site data
+df_decay = pd.read_csv('../rust/decay.csv', header=None)
+df_oee = pd.read_csv('../rust/oee.csv', header=None)
 
-    dataset = {}
-    gps, gms, omegas = set(), set(), set()
-
-    with open(filename, 'r') as f:
-        for line in f:
-            vals = [float(x) for x in line.strip().split(',') if x]
-            if len(vals) < 3:
-                continue
-                
-            gp, gm, omega = vals[0], vals[1], vals[2]
-            
-            # Extract the triplets (Re[lambda], Im[lambda], OEE)
-            # Reshape into an N x 3 array
-            triplets = np.array(vals[3:]).reshape(-1, 3)
-            
-            # Store in a dictionary keyed by the parameter tuple
-            dataset[(gp, gm, omega)] = {
-                're': triplets[:, 0],
-                'im': triplets[:, 1],
-                'oee': triplets[:, 2]
-            }
-            
-            gps.add(gp)
-            gms.add(gm)
-            omegas.add(omega)
-
-    return dataset, sorted(list(gps)), sorted(list(gms)), sorted(list(omegas))
-
-# --- Load Data ---
-data_file = '../rust/oee.csv'
-dataset, gps, gms, omegas = load_data(data_file)
-
-if not dataset:
-    print("No valid data found in the file.")
-    sys.exit(1)
-
-# --- Initial Parameters ---
-init_gp = gps[0]
-init_gm = gms[0]
-init_omega = omegas[0]
-
-# --- Setup Plot ---
-fig, (ax_im, ax_re) = plt.subplots(2, 1, figsize=(10, 8))
-plt.subplots_adjust(left=0.1, bottom=0.25, hspace=0.3)
-
-# Initial scatter plots
-scatter_im = ax_im.scatter([], [], c='royalblue', alpha=0.7, edgecolors='none')
-ax_im.set_xlabel('Energy Oscillation Im[λ]')
-ax_im.set_ylabel('Operator Entanglement Entropy (OEE)')
-ax_im.grid(True, linestyle='--', alpha=0.6)
-
-scatter_re = ax_re.scatter([], [], c='royalblue', alpha=0.7, edgecolors='none')
-ax_re.set_xlabel('Decay Rate -Re[λ]')
-ax_re.set_ylabel('Operator Entanglement Entropy (OEE)')
-ax_re.grid(True, linestyle='--', alpha=0.6)
-
-# Title for the figure
-title_text = fig.suptitle(f"γ+ = {init_gp:.4f}  |  γ- = {init_gm:.4f}  |  ω = {init_omega:.4f}", fontsize=12)
-
-def set_axes_limits(ax, x_data, y_data):
-    """Helper to explicitly set plot limits with a 5% margin."""
-    if len(x_data) == 0 or len(y_data) == 0:
-        return
-    x_min, x_max = x_data.min(), x_data.max()
-    y_min, y_max = y_data.min(), y_data.max()
-    
-    x_margin = (x_max - x_min) * 0.05 if x_max > x_min else 0.1
-    y_margin = (y_max - y_min) * 0.05 if y_max > y_min else 0.1
-    
-    ax.set_xlim(x_min - x_margin, x_max + x_margin)
-    ax.set_ylim(y_min - y_margin, y_max + y_margin)
-
-def update_plot(gp, gm, omega):
-    # Find the closest matching parameters in the dataset to avoid floating point mismatch
-    closest_gp = min(gps, key=lambda x: abs(x - gp))
-    closest_gm = min(gms, key=lambda x: abs(x - gm))
-    closest_omega = min(omegas, key=lambda x: abs(x - omega))
-    
-    key = (closest_gp, closest_gm, closest_omega)
-    
-    if key in dataset:
-        d = dataset[key]
+# 2. Parse decay_12 into a long format
+decay_rows = []
+for idx, row in df_decay.iterrows():
+    q_sector, gp, gm, omega = row[0], row[1], row[2], row[3]
+    for i in range(4, len(row), 5):
+        if pd.isna(row[i]): break
+        decay_rows.append([q_sector, gp, gm, omega, row[i], row[i+1], row[i+2], row[i+3]])
         
-        # Update Im[lambda] vs OEE
-        scatter_im.set_offsets(np.c_[d['im'], d['oee']])
-        set_axes_limits(ax_im, d['im'], d['oee'])
+df_decay_long = pd.DataFrame(decay_rows, columns=['q_sector', 'gp', 'gm', 'omega', 'real_eig', 'imag_eig', 'overlap', 'occupation'])
+
+# 3. Parse oee_12 into a long format
+oee_rows = []
+for idx, row in df_oee.iterrows():
+    q_sector, gp, gm, omega = row[0], row[1], row[2], row[3]
+    for i in range(4, len(row), 3):
+        if pd.isna(row[i]): break
+        oee_rows.append([q_sector, gp, gm, omega, row[i], row[i+1], row[i+2]])
         
-        # Update -Re[lambda] vs OEE (Decay rate is positive)
-        re_vals = -d['re']
-        scatter_re.set_offsets(np.c_[re_vals, d['oee']])
-        set_axes_limits(ax_re, re_vals, d['oee'])
-        
-        title_text.set_text(f"γ+ = {closest_gp:.4f}  |  γ- = {closest_gm:.4f}  |  ω = {closest_omega:.4f}")
-    else:
-        title_text.set_text(f"Data not found for γ+={closest_gp:.3f}, γ-={closest_gm:.3f}, ω={closest_omega:.3f}")
-        scatter_im.set_offsets(np.empty((0, 2)))
-        scatter_re.set_offsets(np.empty((0, 2)))
+df_oee_long = pd.DataFrame(oee_rows, columns=['q_sector', 'gp', 'gm', 'omega', 'real_eig', 'imag_eig', 'entropy'])
+
+# 4. Round eigenvalues to 5 decimal places to ensure a clean inner merge
+df_decay_long['real_eig_round'] = df_decay_long['real_eig'].round(5)
+df_decay_long['imag_eig_round'] = df_decay_long['imag_eig'].round(5)
+df_oee_long['real_eig_round'] = df_oee_long['real_eig'].round(5)
+df_oee_long['imag_eig_round'] = df_oee_long['imag_eig'].round(5)
+
+# 5. Merge the datasets based on the parameters, sector, and matching eigenvalues
+df_merged = pd.merge(df_decay_long, df_oee_long, 
+                     on=['q_sector', 'gp', 'gm', 'omega', 'real_eig_round', 'imag_eig_round'], 
+                     how='inner')
+df_merged_clean = df_merged.drop_duplicates(subset=['q_sector', 'gp', 'gm', 'omega', 'real_eig_x', 'imag_eig_x'])
+
+# -------------------------------------------------------------------------
+# SETUP: DYNAMIC EXTRACTION OF PARAMETERS AND SECTORS
+# -------------------------------------------------------------------------
+params = df_merged_clean[['gp', 'gm']].drop_duplicates().sort_values(by=['gp', 'gm']).values
+sectors = sorted(df_merged_clean['q_sector'].unique())
+
+marker_list = ['o', 's', '^', 'D', 'v', '<', '>', 'p', '*']
+marker_map = {sec: marker_list[i % len(marker_list)] for i, sec in enumerate(sectors)}
+
+# Calculate grid size dynamically
+n_plots = len(params)
+cols = 2
+rows = int(np.ceil(n_plots / cols))
+
+# Global color limits
+global_ent_min, global_ent_max = df_merged_clean['entropy'].min(), df_merged_clean['entropy'].max()
+decay_rate = -df_merged_clean['real_eig_x']
+global_dec_min, global_dec_max = decay_rate.min(), decay_rate.max()
+# -------------------------------------------------------------------------
+
+
+# -------------------------------------------------------------------------
+# 6. Plot Overlap vs Im[lambda] colored by OEE
+# -------------------------------------------------------------------------
+fig1, axes1 = plt.subplots(rows, cols, figsize=(14, 5 * rows), constrained_layout=True)
+axes1_flat = np.array(axes1).flatten() if n_plots > 1 else np.array([axes1])
+active_axes1 = []
+
+for i, (gp, gm) in enumerate(params):
+    ax = axes1_flat[i]
+    active_axes1.append(ax)
+    subset = df_merged_clean[(df_merged_clean['gp'] == gp) & (df_merged_clean['gm'] == gm)]
     
-    fig.canvas.draw_idle()
+    for sector in sectors:
+        sec_data = subset[subset['q_sector'] == sector]
+        if sec_data.empty: continue
+            
+        sc1 = ax.scatter(sec_data['imag_eig_x'], sec_data['overlap'], 
+                         c=sec_data['entropy'], cmap='Reds', vmin=global_ent_min, vmax=global_ent_max,
+                         marker=marker_map[sector], label=f'Sector {int(sector)}',
+                         s=40, alpha=0.9, edgecolors='gray', linewidth=0.5)
+    
+    ax.set_title(f'γ+={gp:.3f}, γ-={gm:.3f}')
+    ax.set_xlabel('Imaginary Part Im[λ] (Oscillation)')
+    ax.set_ylabel('Overlap')
+    ax.grid(True, linestyle='--', alpha=0.5)
+    ax.set_facecolor('#f0f0f0')
+    ax.legend(loc='best', fontsize='small')
 
-# --- Setup Sliders ---
-axcolor = 'lightgoldenrodyellow'
-ax_gp = plt.axes([0.15, 0.12, 0.75, 0.03], facecolor=axcolor)
-ax_gm = plt.axes([0.15, 0.08, 0.75, 0.03], facecolor=axcolor)
-ax_omega = plt.axes([0.15, 0.04, 0.75, 0.03], facecolor=axcolor)
+# Clean up empty subplots
+for j in range(n_plots, len(axes1_flat)):
+    fig1.delaxes(axes1_flat[j])
 
-# Helper to avoid identical min/max bounds when a parameter only has one unique value
-def get_bounds(vals):
-    return (vals[0] - 0.1, vals[0] + 0.1) if len(vals) == 1 else (min(vals), max(vals))
+# Attach colorbar explicitly to the right of the active axes
+cbar1 = fig1.colorbar(sc1, ax=active_axes1, location='right', shrink=0.8, pad=0.02)
+cbar1.set_label('Operator Entanglement Entropy (OEE)')
+plt.show()
 
-gp_min, gp_max = get_bounds(gps)
-gm_min, gm_max = get_bounds(gms)
-omega_min, omega_max = get_bounds(omegas)
 
-# Use valstep to snap the sliders exclusively to the discrete values found in the CSV
-slider_gp = Slider(ax_gp, 'γ+', gp_min, gp_max, valinit=init_gp, valstep=gps)
-slider_gm = Slider(ax_gm, 'γ-', gm_min, gm_max, valinit=init_gm, valstep=gms)
-slider_omega = Slider(ax_omega, 'ω', omega_min, omega_max, valinit=init_omega, valstep=omegas)
+# -------------------------------------------------------------------------
+# 7. Plot Overlap vs OEE colored by Decay Rate
+# -------------------------------------------------------------------------
+fig2, axes2 = plt.subplots(rows, cols, figsize=(14, 5 * rows), constrained_layout=True)
+axes2_flat = np.array(axes2).flatten() if n_plots > 1 else np.array([axes2])
+active_axes2 = []
 
-def on_change(val):
-    update_plot(slider_gp.val, slider_gm.val, slider_omega.val)
+for i, (gp, gm) in enumerate(params):
+    ax = axes2_flat[i]
+    active_axes2.append(ax)
+    subset = df_merged_clean[(df_merged_clean['gp'] == gp) & (df_merged_clean['gm'] == gm)]
+    
+    for sector in sectors:
+        sec_data = subset[subset['q_sector'] == sector]
+        if sec_data.empty: continue
+            
+        sc2 = ax.scatter(sec_data['entropy'], sec_data['overlap'], 
+                         c=-sec_data['real_eig_x'], cmap='Reds', vmin=global_dec_min, vmax=global_dec_max,
+                         marker=marker_map[sector], label=f'Sector {int(sector)}',
+                         s=40, alpha=0.9, edgecolors='gray', linewidth=0.5)
+    
+    ax.set_title(f'γ+={gp:.3f}, γ-={gm:.3f}')
+    ax.set_xlabel('Operator Entanglement Entropy (OEE)')
+    ax.set_ylabel('Overlap')
+    ax.grid(True, linestyle='--', alpha=0.5)
+    ax.set_facecolor('#f0f0f0')
+    ax.legend(loc='best', fontsize='small')
 
-slider_gp.on_changed(on_change)
-slider_gm.on_changed(on_change)
-slider_omega.on_changed(on_change)
+# Clean up empty subplots
+for j in range(n_plots, len(axes2_flat)):
+    fig2.delaxes(axes2_flat[j])
 
-# Initialize the first view
-update_plot(init_gp, init_gm, init_omega)
-
+# Attach colorbar explicitly to the right of the active axes
+cbar2 = fig2.colorbar(sc2, ax=active_axes2, location='right', shrink=0.8, pad=0.02)
+cbar2.set_label('Decay Rate (-Re[λ])')
 plt.show()
