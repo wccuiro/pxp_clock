@@ -91,8 +91,15 @@ for idx, row in unique_params.iterrows():
     # Overlap C_k vs Imaginary
     sns.scatterplot(data=subset, x='abs_imag', y='abs_c_k', hue='q_sector', 
                     palette='Set1', ax=axes[1, 0], edgecolor='k', alpha=0.7)
+    deltaE = 1.33  # Assuming this is the fundamental frequency spacing
+    x_ticks = [i * deltaE for i in range(9)]
+    axes[1, 0].set_xticks(x_ticks)
+    axes[1, 0].set_xticklabels(['0', r'$\Delta E$', r'$2\Delta E$', r'$3\Delta E$', r'$4\Delta E$', r'$5\Delta E$', r'$6\Delta E$', r'$7\Delta E$', r'$8\Delta E$'])
     axes[1, 0].set_title('Overlap $C_k$ vs Abs Imaginary Part')
     axes[1, 0].set_xlabel('Absolute Imaginary Part (Freq)')
+    for x_val in x_ticks:
+        axes[1, 0].axvline(x=x_val, color='gray', linestyle='--', alpha=0.5, zorder=1)
+    
 
     # Overlap S_k vs Real
     sns.scatterplot(data=subset, x='real_eval', y='abs_s_k', hue='q_sector', 
@@ -103,8 +110,12 @@ for idx, row in unique_params.iterrows():
     # Overlap S_k vs Imaginary
     sns.scatterplot(data=subset, x='abs_imag', y='abs_s_k', hue='q_sector', 
                     palette='Set1', ax=axes[1, 1], edgecolor='k', alpha=0.7)
+    axes[1, 1].set_xticks(x_ticks)
+    axes[1, 1].set_xticklabels(['0', r'$\Delta E$', r'$2\Delta E$', r'$3\Delta E$', r'$4\Delta E$', r'$5\Delta E$', r'$6\Delta E$', r'$7\Delta E$', r'$8\Delta E$'])
     axes[1, 1].set_title('Overlap $S_k$ vs Abs Imaginary Part')
     axes[1, 1].set_xlabel('Absolute Imaginary Part (Freq)')
+    for x_val in x_ticks:
+        axes[1, 1].axvline(x=x_val, color='gray', linestyle='--', alpha=0.5, zorder=1)
     
     # Overlap R_k vs Real
     sns.scatterplot(data=subset, x='real_eval', y='R_k', hue='q_sector', 
@@ -115,9 +126,13 @@ for idx, row in unique_params.iterrows():
     # Overlap R_k vs Imaginary
     sns.scatterplot(data=subset, x='abs_imag', y='R_k', hue='q_sector', 
                     palette='Set1', ax=axes[1, 2], edgecolor='k', alpha=0.7)
+    axes[1, 2].set_xticks(x_ticks)
+    axes[1, 2].set_xticklabels(['0', r'$\Delta E$', r'$2\Delta E$', r'$3\Delta E$', r'$4\Delta E$', r'$5\Delta E$', r'$6\Delta E$', r'$7\Delta E$', r'$8\Delta E$'])
     axes[1, 2].set_title('Overlap $R_k$ vs Abs Imaginary Part')
     axes[1, 2].set_xlabel('Absolute Imaginary Part (Freq)')
-    
+    for x_val in x_ticks:
+        axes[1, 2].axvline(x=x_val, color='gray', linestyle='--', alpha=0.5, zorder=1)
+
     # axes[2, 0].remove()
     # axes[2, 0] = fig.add_subplot(3, 4, 9, projection='polar') # 9 is the 1-based index for row 3, col 1
     # sc1 = axes[2, 0].scatter(subset['phase_c'], subset['R_k'], c=subset['abs_imag'], cmap='viridis', alpha=0.8, edgecolor='k', s=40)
@@ -127,20 +142,20 @@ for idx, row in unique_params.iterrows():
     # Real vs Phase 
     sns.scatterplot(data=subset, x='phase_c', y='real_eval', hue='q_sector', 
                     palette='Set1', ax=axes[2, 0], edgecolor='k', alpha=0.7)
-    axes[2, 0].set_title('Real Part vs Overlap Phase $\phi_k$')
-    axes[2, 0].set_xlabel('Phase $\phi_k$ (rad)')
+    axes[2, 0].set_title(r'Real Part vs Overlap Phase $\phi_k$')
+    axes[2, 0].set_xlabel(r'Phase $\phi_k$ (rad)')
 
     # Imaginary vs Phase 
     sns.scatterplot(data=subset, x='phase_c', y='abs_imag', hue='q_sector', 
                     palette='Set1', ax=axes[2, 1], edgecolor='k', alpha=0.7)
-    axes[2, 1].set_title('Abs Imaginary Part vs Overlap Phase $\phi_k$')
-    axes[2, 1].set_xlabel('Phase $\phi_k$ (rad)')
+    axes[2, 1].set_title(r'Abs Imaginary Part vs Overlap Phase $\phi_k$')
+    axes[2, 1].set_xlabel(r'Phase $\phi_k$ (rad)')
 
     # Overlap R_k vs Phase    
     sns.scatterplot(data=subset, x='phase_c', y='R_k', hue='q_sector', 
                     palette='Set1', ax=axes[2, 2], edgecolor='k', alpha=0.7)
-    axes[2, 2].set_title('Overlap $R_k$ vs Overlap Phase $\phi_k$')
-    axes[2, 2].set_xlabel('Phase $\phi_k$ (rad)')
+    axes[2, 2].set_title(r'Overlap $R_k$ vs Overlap Phase $\phi_k$')
+    axes[2, 2].set_xlabel(r'Phase $\phi_k$ (rad)')
 
     
     # Apply grid styling to all subplots
