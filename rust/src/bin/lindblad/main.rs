@@ -693,27 +693,29 @@ fn steady_state_properties(
 #[derive(Debug, Clone)]
 pub struct SpectralData {
     pub real_eigenvalue: f64,
-    pub imag_eigenvalue: f64,
-    pub overlap: f64,
-    pub occupation: f64,
-    pub block_size: usize, 
+    pub abs_imag_eigenvalue: f64,
+    pub c_k: f64,       // Amplitude of Cosine mode
+    pub s_k: f64,       // Amplitude of Sine mode
+    pub occ_c: f64,     // Occupation of Cosine mode
+    pub occ_s: f64,     // Occupation of Sine mode
+    pub block_size: usize,
 }
 
-pub fn analyze_lindbladian(
+fn analyze_lindbladian(
     eigenvalues: &Array1<Complex64>,
     eigenvectors: &Array2<Complex64>,
     occ_op: &Array2<Complex64>,
     rho: &Array1<Complex64>,
     tol: f64,
+    l: usize,
+    basis_states: &[BasisState],
+    q_sector: i64,
+    phases: &[Complex64],
 ) -> Result<Vec<SpectralData>, Box<dyn Error>> {
     
-    // 1. Standard Eigen Decomposition
-    // Note: For defective matrices, LAPACK returns "parallel" eigenvectors
-    // for the Jordan chain. We detect this using SVD below.
     let evals = eigenvalues;
     let evecs = eigenvectors;
     
-    // 2. Pair eigenvalues with indices and Sort by Real part (Decay Rate)
     let mut tagged_evals: Vec<(usize, Complex64)> = evals
         .iter()
         .enumerate()
@@ -734,7 +736,6 @@ pub fn analyze_lindbladian(
         let current_val = tagged_evals[i].1;
         let mut cluster_indices = vec![tagged_evals[i].0];
         
-        // Find all subsequent eigenvalues that are within 'tol' distance
         let mut j = i + 1;
         while j < tagged_evals.len() {
             if (tagged_evals[j].1 - current_val).norm() < tol {
@@ -745,11 +746,15 @@ pub fn analyze_lindbladian(
             }
         }
         
-        // m_a: Algebraic Multiplicity (How many eigenvalues are identical)
         let m_a = cluster_indices.len();
 
+        // Skip negative imaginary frequencies to prevent double counting
+        if current_val.im < -tol {
+            i = j;
+            continue;
+        }
+
         // 4. Extract Eigenvectors for this cluster
-        // We create a matrix of shape (N x m_a)
         let mut raw_subspace = Array2::<Complex64>::zeros((n, m_a));
         for (col_idx, &eig_idx) in cluster_indices.iter().enumerate() {
             let vec = evecs.column(eig_idx);
@@ -761,51 +766,86 @@ pub fn analyze_lindbladian(
         let rank_tol = 1e-5; 
         let m_g = sigma.iter().filter(|&&s| s > rank_tol).count();
 
-        // [RESTORED] Compute the orthonormal basis `u`
-        // This is required for both branches below to calculate overlaps.
         let (u_opt, _, _) = raw_subspace.svd(true, false)?;
         let u = u_opt.ok_or("SVD U calculation failed")?;
 
         // 6-8: Branch based on diagonalizability
         if m_g == m_a {
-            // Fully diagonalizable (Jordan blocks of size 1)
             for k in 0..m_g {
                 let u_k = u.column(k);
-                let overlap = (&u_k).mapv(|x| x.conj()).dot(rho).norm();
-
-                let occupation = (&u_k).mapv(|x| x.conj()).dot(occ_op).dot(&u_k).norm();                
+                
+                // Compute the raw complex traces
+                let a_k = (&u_k).mapv(|x| x.conj()).dot(rho);
+                let aux_vec = occ_op.dot(&u_k);
+                let o_k = compute_trace(l, basis_states, &aux_vec, q_sector, phases);
+                
+                let c_k;
+                let s_k;
+                let occ_c;
+                let occ_s;
+                
+                if current_val.im <= tol {
+                    // Purely real decay mode (no pair)
+                    c_k = a_k.re;
+                    s_k = 0.0;
+                    occ_c = o_k.re;
+                    occ_s = 0.0;
+                } else {
+                    // Oscillatory mode: combine the conjugate pair
+                    c_k = 2.0 * a_k.re;
+                    s_k = -2.0 * a_k.im;
+                    occ_c = 2.0 * o_k.re;
+                    occ_s = -2.0 * o_k.im;
+                }
                 
                 results.push(SpectralData {
                     real_eigenvalue: current_val.re,
-                    imag_eigenvalue: current_val.im,
-                    overlap,
-                    occupation,
+                    abs_imag_eigenvalue: current_val.im.abs(),
+                    c_k,
+                    s_k,
+                    occ_c,
+                    occ_s,
                     block_size: 1,
                 });
             }
         } else {
             // Defective subspace (Jordan blocks > 1)
-            // [FIXED] Explicitly designate 0.0 as an f64 to resolve the ambiguous float error.
-            let mut overlap_sq = 0.0f64;
-            let mut occupation_sq = 0.0f64;
+            let mut c_k_total = 0.0f64;
+            let mut s_k_total = 0.0f64;
+            let mut occ_c_total = 0.0f64;
+            let mut occ_s_total = 0.0f64;
+            
             for k in 0..m_g {
                 let u_k = u.column(k);
-                overlap_sq += (&u_k).mapv(|x| x.conj()).dot(rho).norm_sqr();
-
-                occupation_sq += (&u_k).mapv(|x| x.conj()).dot(occ_op).dot(&u_k).norm_sqr();
+                
+                let a_k = (&u_k).mapv(|x| x.conj()).dot(rho);
+                let aux_vec = occ_op.dot(&u_k);
+                let o_k = compute_trace(l, basis_states, &aux_vec, q_sector, phases);
+                
+                if current_val.im <= tol {
+                    c_k_total += a_k.re.powi(2);
+                    occ_c_total += o_k.re.powi(2);
+                } else {
+                    c_k_total += (2.0 * a_k.re).powi(2);
+                    s_k_total += (-2.0 * a_k.im).powi(2);
+                    occ_c_total += (2.0 * o_k.re).powi(2);
+                    occ_s_total += (-2.0 * o_k.im).powi(2);
+                }
             }
             
             results.push(SpectralData {
                 real_eigenvalue: current_val.re,
-                imag_eigenvalue: current_val.im,
-                overlap: overlap_sq.sqrt(),
-                occupation: occupation_sq.sqrt(),
-                block_size: m_a, // Note: This still assumes a single block of size m_a
+                abs_imag_eigenvalue: current_val.im.abs(),
+                c_k: c_k_total.sqrt(),
+                s_k: s_k_total.sqrt(),
+                occ_c: occ_c_total.sqrt(),
+                occ_s: occ_s_total.sqrt(),
+                block_size: m_a,
             });
         }
 
-        // Advance the outer loop index past this cluster
-        i = j;    }
+        i = j;
+    }
 
     Ok(results)
 }
@@ -1142,16 +1182,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     res.oee_str.push('\n');
 
-
                     // Decay & Overlap Analysis
-                    if let Ok(analysis) = analyze_lindbladian(&evals, &evecs, n_matrix, rho_vec_neel, 1e-6) {
+                    if let Ok(analysis) = analyze_lindbladian(
+                        &evals, &evecs, n_matrix, rho_vec_neel, 1e-6, 
+                        l, &basis_states, q_sector, &phases
+                    ) {
                         res.decay_str.push_str(&format!("{},{},{},{}", q_sector, gp, gm, omega)); 
                         for data in analysis {
-                            res.decay_str.push_str(&format!(",{:.10},{:.10},{:.10},{},{}", 
-                                data.real_eigenvalue, data.imag_eigenvalue, data.overlap, data.occupation, data.block_size));
+                            // Format: real_eval, abs_imag_eval, c_k, s_k, occ_c, occ_s, block_size
+                            res.decay_str.push_str(&format!(",{:.10},{:.10},{:.10},{:.10},{:.10},{:.10},{}", 
+                                data.real_eigenvalue, 
+                                data.abs_imag_eigenvalue, 
+                                data.c_k, 
+                                data.s_k, 
+                                data.occ_c, 
+                                data.occ_s, 
+                                data.block_size
+                            ));
                         }
                         res.decay_str.push('\n');
-                    }                
+                    }
 
                     // Raw Eigenvalues Dump
                     res.eigenvalues_str.push_str(&format!("{},{},{},{}", q_sector, gp, gm, omega));
