@@ -1,47 +1,51 @@
 import matplotlib.pyplot as plt
 import numpy as np
 
-# Simulation parameters matching your Rust code
 dt = 0.001
 t_final = 10.0
 num_steps = int(round(t_final / dt))
-
-# Create the time array (num_steps + 1 points to include t=0 and t=10)
 t = np.linspace(0, t_final, num_steps + 1)
 
-plt.figure(figsize=(12, 7))
-
-# Read and parse the CSV file
+data = []
 with open("../rust/occupation_time_alpha.csv", "r") as f:
     for line in f:
-        # Split the comma-separated line
         parts = line.strip().split(',')
-        
-        # Extract the sweep parameters (first 4 columns)
         alpha = float(parts[0])
         gp = float(parts[1])
         gm = float(parts[2])
         omega = float(parts[3])
-        
-        # Extract the fidelity values
-        # The observables start at index 4 as triplets: n, nn, fidelity
-        # Fidelity is at index 6, 9, 12, etc. (parts[6::3])
+        # Extract fidelity (starts at index 6, every 3rd element)
         fid = [float(x) for x in parts[6::3]]
+        data.append({
+            'alpha': alpha, 'gp': gp, 'gm': gm, 'omega': omega, 'fid': fid
+        })
+
+# Get unique parameter combinations of (gp, gm, omega)
+combinations = list(set([(d['gp'], d['gm'], d['omega']) for d in data]))
+combinations.sort()
+
+# Create 2x2 subplots
+fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+axes = axes.flatten()
+
+for i, combo in enumerate(combinations):
+    gp, gm, omega = combo
+    ax = axes[i]
+    
+    # Filter data for this combination
+    subset = [d for d in data if d['gp'] == gp and d['gm'] == gm and d['omega'] == omega]
+    subset.sort(key=lambda x: x['alpha'])
+    
+    # Plot each alpha value
+    for d in subset:
+        ax.plot(t, d['fid'], label=fr"$\alpha={d['alpha']}$")
         
-        # Plot the data line for this specific parameter configuration
-        plt.plot(t, fid, label=fr"$\alpha={alpha}, \gamma_+={gp}, \gamma_-={gm}$")
+    ax.set_title(fr"$\gamma_+={gp}, \gamma_-={gm}, \Omega={omega}$")
+    ax.set_xlabel("Time")
+    ax.set_ylabel("Fidelity")
+    ax.legend(loc='upper right')
+    ax.grid(True, linestyle='--', alpha=0.7)
 
-# Format and label the plot
-plt.xlabel("Time")
-plt.ylabel("Fidelity")
-plt.title("Fidelity Dynamics vs Time")
-
-# Place the legend outside the plot area so it doesn't cover the data
-plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
-
-plt.grid(True, linestyle='--', alpha=0.7)
 plt.tight_layout()
-
-# Save and/or display the figure
-# plt.savefig("fidelity_plot.png", dpi=150)
+plt.savefig("fidelity_comparison_alpha.png", dpi=150)
 plt.show()
