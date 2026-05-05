@@ -138,7 +138,7 @@ function compute_clik_spectrum(N::Int, Omega::Float64, gamma_plus::Float64, gamm
 end
 
 # Execute
-N = 6
+N = 8
 Omega = 1.0
 gamma_plus = 0.2
 gamma_minus = 0.001
