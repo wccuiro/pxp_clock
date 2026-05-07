@@ -137,6 +137,81 @@ function generate_krylov_sequence(rho_init, L_mpo, sites, z::ComplexF64, num_ste
     return states
 end
 
+
+function SVD_stabilized(M::AbstractMatrix)
+    # Use Julia's LinearAlgebra svd object explicitly for safety
+    F = svd(M)
+    A = F.U
+    L = F.S
+    B = F.V 
+    
+    threshold = 1e-4
+    
+    # 1. Find the first index p where the singular value drops below the threshold
+    p = length(L) + 1
+    for i in 2:length(L)
+        if L[i] / L[1] < threshold
+            p = i
+            break # Stop at the first drop
+        end
+    end
+
+    # 2. Iteratively refine the smaller singular values
+    while p <= length(L)
+        # Correctly project M onto the subspace of the remaining singular vectors
+        X = A[:, p:end]' * M * B[:, p:end]
+        
+        # Compute SVD of the subproblem
+        Fp = svd(X)
+        Ap = Fp.U
+        Lp = Fp.S
+        Bp = Fp.V
+
+        # Find the next drop in the subproblem
+        p1 = length(Lp) + 1
+        for i in 2:length(Lp)
+            if Lp[i] / Lp[1] < threshold
+                p1 = i
+                break
+            end
+        end
+
+        # Correctly rotate the entire column vectors
+        A[:, p:end] = A[:, p:end] * Ap
+        B[:, p:end] = B[:, p:end] * Bp
+        L[p:end] = Lp
+
+        # Break to avoid infinite loops if no further threshold drop is found
+        if p1 > length(Lp)
+            break
+        end
+
+        # Map local submatrix index back to the global index
+        p = p + p1 - 1
+    end
+
+    return A, L, B
+end
+
+function L_eff(krylov_states)
+    K = length(krylov_states)
+    M = zeros(ComplexF64, K, K)
+    L_mat = zeros(ComplexF64, K, K)
+    
+    for i in 1:K
+        for j in 1:K
+            M[i, j] = inner(krylov_states[i], krylov_states[j])
+            # The prime has been removed here to fix the double-prime bug
+            L_mat[i, j] = inner(krylov_states[i]', L_mpo, krylov_states[j])
+        end
+    end
+
+    M = (M + M') / 2.0
+
+
+    return M, L_mat
+end
+
 # -----------------------------------------------------------------------------
 # 5. CLIK-MPS Execution
 # -----------------------------------------------------------------------------
