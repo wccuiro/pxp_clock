@@ -1,5 +1,5 @@
 use ndarray::{Array1,Array2};
-use ndarray_linalg::{Eig, Eigh, SVD};
+use ndarray_linalg::{Eig, Eigh, SVD, Determinant};
 use num_complex::Complex64;
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
@@ -1036,9 +1036,42 @@ pub fn operator_entanglement_entropy(
     Ok(entropy)
 }
 
+fn is_diagonalizable(matrix: &Array2<Complex64>) -> bool {
+    let (rows, cols) = matrix.dim();
+    
+    if rows != cols { return false; }
+    
+    match matrix.eig() {
+        Ok((_, eigenvectors)) => {
+            // Compute SVD of the eigenvector matrix to get singular values
+            match eigenvectors.svd(false, false) {
+                Ok((_, s, _)) => {
+                    let max_sv = s[0]; // Largest singular value
+                    let min_sv = s[s.len() - 1]; // Smallest singular value
+                    
+                    // If the smallest singular value is exactly 0, it's strictly defective
+                    if min_sv == 0.0 {
+                        return false;
+                    }
+                    
+                    // Calculate condition number
+                    let condition_number = max_sv / min_sv;
+                    
+                    // A condition number > 1e12 usually means it is numerically indistinguishable
+                    // from a defective matrix at standard double precision.
+                    let max_allowed_condition = 1e12; 
+                    
+                    condition_number < max_allowed_condition
+                },
+                Err(_) => false,
+            }
+        },
+        Err(_) => false,
+    }
+}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let l = 10;
+    let l = 8;
     let _q_sector = 0;
     
     let basis = translationally_invariant_basis(l);
@@ -1056,8 +1089,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     
-    let gp_values = Array1::linspace(0.001, 0.2, 2);
-    let gm_values = Array1::linspace(0.001, 0.2, 2);
+    let gp_values = Array1::linspace(0.001, 0.2, 1);
+    let gm_values = Array1::linspace(0.001, 0.2, 10);
     let omega_values = Array1::linspace(1.0, 2.0, 1);
 
     // let raw_space = Array1::linspace(0.5, 1.0, 3);
@@ -1162,6 +1195,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     dense
                 };
 
+                // Check Diagonalizability
+                if is_diagonalizable(&l_cal_dense) {
+                    println!("Diagonalizability: The matrix sector {}, omega {}, gamma - {}, gamma + {} IS diagonalizable.", q_sector, omega, gm, gp);
+                } else {
+                    println!("Diagonalizability: The matrix sector {}, omega {}, gamma - {}, gamma + {} is NOT diagonalizable.", q_sector, omega, gm, gp);
+                }
+
                 if let Ok((evals, evecs)) = l_cal_dense.eig() {
                     
 // OEE Dump
@@ -1181,27 +1221,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         res.oee_str.push_str(&format!(",{:.10},{:.10},{:.6}", lambda.re, lambda.im, entropy));
                     }
                     res.oee_str.push('\n');
-
-                    // Decay & Overlap Analysis
-                    if let Ok(analysis) = analyze_lindbladian(
-                        &evals, &evecs, n_matrix, rho_vec_neel, 1e-6, 
-                        l, &basis_states, q_sector, &phases
-                    ) {
-                        res.decay_str.push_str(&format!("{},{},{},{}", q_sector, gp, gm, omega)); 
-                        for data in analysis {
-                            // Format: real_eval, abs_imag_eval, c_k, s_k, occ_c, occ_s, block_size
-                            res.decay_str.push_str(&format!(",{:.10},{:.10},{:.10},{:.10},{:.10},{:.10},{}", 
-                                data.real_eigenvalue, 
-                                data.abs_imag_eigenvalue, 
-                                data.c_k, 
-                                data.s_k, 
-                                data.occ_c, 
-                                data.occ_s, 
-                                data.block_size
-                            ));
-                        }
-                        res.decay_str.push('\n');
-                    }
 
                     // Raw Eigenvalues Dump
                     res.eigenvalues_str.push_str(&format!("{},{},{},{}", q_sector, gp, gm, omega));
@@ -1239,8 +1258,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                 }
+
+                let l_cal_dag = l_cal_dense.t().mapv(|c| c.conj());
+
+                if let Ok((evalsdag, evecsdag)) = l_cal_dag.eig() {
+                                        // Decay & Overlap Analysis
+                    if let Ok(analysis) = analyze_lindbladian(
+                        &evalsdag, &evecsdag, n_matrix, rho_vec_neel, 1e-6, 
+                        l, &basis_states, q_sector, &phases
+                    ) {
+                        res.decay_str.push_str(&format!("{},{},{},{}", q_sector, gp, gm, omega)); 
+                        for data in analysis {
+                            // Format: real_eval, abs_imag_eval, c_k, s_k, occ_c, occ_s, block_size
+                            res.decay_str.push_str(&format!(",{:.10},{:.10},{:.10},{:.10},{:.10},{:.10},{}", 
+                                data.real_eigenvalue, 
+                                data.abs_imag_eigenvalue, 
+                                data.c_k, 
+                                data.s_k, 
+                                data.occ_c, 
+                                data.occ_s, 
+                                data.block_size
+                            ));
+                        }
+                        res.decay_str.push('\n');
+                    }
+                }
             }
             res
+            
         })
         .collect();
 
