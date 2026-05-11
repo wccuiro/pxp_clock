@@ -7,7 +7,7 @@ num_steps = int(round(t_final / dt))
 t = np.linspace(0, t_final, num_steps + 1)
 
 data = []
-with open("../rust/occupation_time_alpha.csv", "r") as f:
+with open("../rust/occupation_time_alpha_8.csv", "r") as f:
     for line in f:
         parts = line.strip().split(',')
         alpha = float(parts[0])
@@ -38,7 +38,7 @@ for i, combo in enumerate(combinations):
     
     # Plot each alpha value
     for d in subset:
-        ax.plot(t, d['fid'], label=fr"$\alpha={d['alpha']}$")
+        ax.plot(t, d['fid'], label=fr"$\alpha={d['alpha']:0.02f}$")
         
     ax.set_title(fr"$\gamma_+={gp}, \gamma_-={gm}, \Omega={omega}$")
     ax.set_xlabel("Time")

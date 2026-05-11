@@ -689,167 +689,90 @@ fn steady_state_properties(
 }
 
 
-
-#[derive(Debug, Clone)]
 pub struct SpectralData {
-    pub real_eigenvalue: f64,
-    pub abs_imag_eigenvalue: f64,
-    pub c_k: f64,       // Amplitude of Cosine mode
-    pub s_k: f64,       // Amplitude of Sine mode
-    pub occ_c: f64,     // Occupation of Cosine mode
-    pub occ_s: f64,     // Occupation of Sine mode
-    pub block_size: usize,
+    pub real_eval: f64,
+    pub imag_eval: f64,
+    pub c_k: Complex64,
+    pub o_k: Complex64,
+    pub occupation_c_k: Complex64,
+    pub occupation_o_k: Complex64,
+    pub z_k: Complex64, // Good to track the normalization constant
 }
 
 fn analyze_lindbladian(
-    eigenvalues: &Array1<Complex64>,
-    eigenvectors: &Array2<Complex64>,
+    right_evals: &Array1<Complex64>,
+    left_evals_raw: &Array1<Complex64>, // evalsdag directly from solver
+    right_evecs: &Array2<Complex64>,
+    left_evecs: &Array2<Complex64>,     // evecsdag directly from solver
     occ_op: &Array2<Complex64>,
     rho: &Array1<Complex64>,
-    tol: f64,
     l: usize,
-    basis_states: &[BasisState],
+    basis_states: &[BasisState], 
     q_sector: i64,
     phases: &[Complex64],
 ) -> Result<Vec<SpectralData>, Box<dyn Error>> {
     
-    let evals = eigenvalues;
-    let evecs = eigenvectors;
+    let n_evals = right_evals.len();
+    let mut results = Vec::with_capacity(n_evals);
+
+    // 1. Tag right eigenvalues
+    let mut r_tagged: Vec<(usize, Complex64)> = right_evals.iter().cloned().enumerate().collect();
     
-    let mut tagged_evals: Vec<(usize, Complex64)> = evals
+    // 2. Tag AND CONJUGATE left eigenvalues to fix the adjoint shift
+    let mut l_tagged: Vec<(usize, Complex64)> = left_evals_raw
         .iter()
+        .map(|e| e.conj()) // CRITICAL FIX
         .enumerate()
-        .map(|(i, &e)| (i, e))
         .collect();
 
-    // Sort descending by real part (closest to 0 first)
-    tagged_evals.sort_by(|a, b| {
+    // 3. Strict sorting rule: Real descending, then Imag descending
+    let sort_cmp = |a: &(usize, Complex64), b: &(usize, Complex64)| {
         b.1.re.partial_cmp(&a.1.re).unwrap_or(std::cmp::Ordering::Equal)
-    });
+            .then(b.1.im.partial_cmp(&a.1.im).unwrap_or(std::cmp::Ordering::Equal))
+    };
 
-    let mut results = Vec::new();
-    let n = evecs.nrows();
-    let mut i = 0;
+    r_tagged.sort_by(sort_cmp);
+    l_tagged.sort_by(sort_cmp);
 
-    // 3. Loop through eigenvalues and Cluster them
-    while i < tagged_evals.len() {
-        let current_val = tagged_evals[i].1;
-        let mut cluster_indices = vec![tagged_evals[i].0];
+    for k in 0..n_evals {
+        let (r_idx, current_val) = r_tagged[k]; 
+        let (l_idx, _) = l_tagged[k];      
         
-        let mut j = i + 1;
-        while j < tagged_evals.len() {
-            if (tagged_evals[j].1 - current_val).norm() < tol {
-                cluster_indices.push(tagged_evals[j].0);
-                j += 1;
-            } else {
-                break;
-            }
-        }
-        
-        let m_a = cluster_indices.len();
+        let right_vec = right_evecs.column(r_idx);
+        let left_vec = left_evecs.column(l_idx);
 
-        // Skip negative imaginary frequencies to prevent double counting
-        if current_val.im < -tol {
-            i = j;
-            continue;
-        }
+        // 4. BI-ORTHOGONALITY FIX: Calculate the self-overlap Z_k
+        // Z_k = Tr(left_vec^dagger * right_vec)
+        let z_k = left_vec.mapv(|x| x.conj()).dot(&right_vec);
 
-        // 4. Extract Eigenvectors for this cluster
-        let mut raw_subspace = Array2::<Complex64>::zeros((n, m_a));
-        for (col_idx, &eig_idx) in cluster_indices.iter().enumerate() {
-            let vec = evecs.column(eig_idx);
-            raw_subspace.column_mut(col_idx).assign(&vec);
-        }
+        // Calculate initial overlaps
+        let raw_c_k = left_vec.mapv(|x| x.conj()).dot(rho);
+        let o_k = right_vec.mapv(|x| x.conj()).dot(rho);
 
-        // 5. The Jordan Test: Compute Rank via SVD
-        let (_, sigma, _) = raw_subspace.svd(false, false)?;
-        let rank_tol = 1e-5; 
-        let m_g = sigma.iter().filter(|&&s| s > rank_tol).count();
+        // Normalize the left overlap by Z_k
+        let c_k = raw_c_k / z_k;
 
-        let (u_opt, _, _) = raw_subspace.svd(true, false)?;
-        let u = u_opt.ok_or("SVD U calculation failed")?;
+        // Calculate occupations
+        let aux_left = occ_op.dot(&left_vec);
+        let raw_occupation_c_k = compute_trace(l, basis_states, &aux_left, q_sector, phases);
+        let occupation_c_k = raw_occupation_c_k / z_k;
 
-        // 6-8: Branch based on diagonalizability
-        if m_g == m_a {
-            for k in 0..m_g {
-                let u_k = u.column(k);
-                
-                // Compute the raw complex traces
-                let a_k = (&u_k).mapv(|x| x.conj()).dot(rho);
-                let aux_vec = occ_op.dot(&u_k);
-                let o_k = compute_trace(l, basis_states, &aux_vec, q_sector, phases);
-                
-                let c_k;
-                let s_k;
-                let occ_c;
-                let occ_s;
-                
-                if current_val.im <= tol {
-                    // Purely real decay mode (no pair)
-                    c_k = a_k.re;
-                    s_k = 0.0;
-                    occ_c = o_k.re;
-                    occ_s = 0.0;
-                } else {
-                    // Oscillatory mode: combine the conjugate pair
-                    c_k = 2.0 * a_k.re;
-                    s_k = -2.0 * a_k.im;
-                    occ_c = 2.0 * o_k.re;
-                    occ_s = -2.0 * o_k.im;
-                }
-                
-                results.push(SpectralData {
-                    real_eigenvalue: current_val.re,
-                    abs_imag_eigenvalue: current_val.im.abs(),
-                    c_k,
-                    s_k,
-                    occ_c,
-                    occ_s,
-                    block_size: 1,
-                });
-            }
-        } else {
-            // Defective subspace (Jordan blocks > 1)
-            let mut c_k_total = 0.0f64;
-            let mut s_k_total = 0.0f64;
-            let mut occ_c_total = 0.0f64;
-            let mut occ_s_total = 0.0f64;
-            
-            for k in 0..m_g {
-                let u_k = u.column(k);
-                
-                let a_k = (&u_k).mapv(|x| x.conj()).dot(rho);
-                let aux_vec = occ_op.dot(&u_k);
-                let o_k = compute_trace(l, basis_states, &aux_vec, q_sector, phases);
-                
-                if current_val.im <= tol {
-                    c_k_total += a_k.re.powi(2);
-                    occ_c_total += o_k.re.powi(2);
-                } else {
-                    c_k_total += (2.0 * a_k.re).powi(2);
-                    s_k_total += (-2.0 * a_k.im).powi(2);
-                    occ_c_total += (2.0 * o_k.re).powi(2);
-                    occ_s_total += (-2.0 * o_k.im).powi(2);
-                }
-            }
-            
-            results.push(SpectralData {
-                real_eigenvalue: current_val.re,
-                abs_imag_eigenvalue: current_val.im.abs(),
-                c_k: c_k_total.sqrt(),
-                s_k: s_k_total.sqrt(),
-                occ_c: occ_c_total.sqrt(),
-                occ_s: occ_s_total.sqrt(),
-                block_size: m_a,
-            });
-        }
+        let aux_right = occ_op.dot(&right_vec);
+        let occupation_o_k = compute_trace(l, basis_states, &aux_right, q_sector, phases);
 
-        i = j;
+        results.push(SpectralData {
+            real_eval: current_val.re,
+            imag_eval: current_val.im,
+            c_k,
+            o_k,
+            occupation_c_k,
+            occupation_o_k,
+            z_k,
+        });
     }
 
     Ok(results)
 }
-
 
 fn precompute_phases(l: usize) -> Vec<Complex64> {
     (0..l).map(|k| {
@@ -1071,7 +994,7 @@ fn is_diagonalizable(matrix: &Array2<Complex64>) -> bool {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let l = 8;
+    let l = 10;
     let _q_sector = 0;
     
     let basis = translationally_invariant_basis(l);
@@ -1089,8 +1012,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     
-    let gp_values = Array1::linspace(0.001, 0.2, 1);
-    let gm_values = Array1::linspace(0.001, 0.2, 10);
+    let gp_values = Array1::linspace(0.001, 0.2, 2);
+    let gm_values = Array1::linspace(0.001, 0.2, 2);
     let omega_values = Array1::linspace(1.0, 2.0, 1);
 
     // let raw_space = Array1::linspace(0.5, 1.0, 3);
@@ -1203,8 +1126,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
 
                 if let Ok((evals, evecs)) = l_cal_dense.eig() {
-                    
-// OEE Dump
+
+                    let l_cal_dag = l_cal_dense.t().mapv(|c| c.conj());
+
+                    if let Ok((evalsdag, evecsdag)) = l_cal_dag.eig() {
+                                            // Decay & Overlap Analysis
+                        if let Ok(analysis) = analyze_lindbladian(
+                            &evals, &evalsdag, &evecs, &evecsdag, &n_matrix, &rho_vec_neel, 
+                            l, &basis_states, q_sector, &phases
+                        ) {
+                            res.decay_str.push_str(&format!("{},{},{},{}", q_sector, gp, gm, omega)); 
+                            for data in analysis {
+                                // Format: real_eval, abs_imag_eval, c_k, s_k, occ_c, occ_s, 
+                                res.decay_str.push_str(&format!(",{:.10},{:.10},{:.10},{:.10},{:.10},{:.10},{:.10},{:.10}", 
+                                    data.real_eval, 
+                                    data.imag_eval, 
+                                    data.c_k.re,
+                                    data.c_k.im, 
+                                    data.o_k.re,
+                                    data.o_k.im, 
+                                    data.occupation_c_k.re, 
+                                    data.occupation_c_k.im
+                                ));
+                            }
+                            res.decay_str.push('\n');
+                        }
+                    }
+
+
+
                     res.oee_str.push_str(&format!("{},{},{},{}", q_sector, gp, gm, omega));
                     for (&lambda, vec_view) in evals.iter().zip(evecs.columns()) {
                         let vec_contiguous = vec_view.to_vec();
@@ -1259,30 +1209,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
 
-                let l_cal_dag = l_cal_dense.t().mapv(|c| c.conj());
-
-                if let Ok((evalsdag, evecsdag)) = l_cal_dag.eig() {
-                                        // Decay & Overlap Analysis
-                    if let Ok(analysis) = analyze_lindbladian(
-                        &evalsdag, &evecsdag, n_matrix, rho_vec_neel, 1e-6, 
-                        l, &basis_states, q_sector, &phases
-                    ) {
-                        res.decay_str.push_str(&format!("{},{},{},{}", q_sector, gp, gm, omega)); 
-                        for data in analysis {
-                            // Format: real_eval, abs_imag_eval, c_k, s_k, occ_c, occ_s, block_size
-                            res.decay_str.push_str(&format!(",{:.10},{:.10},{:.10},{:.10},{:.10},{:.10},{}", 
-                                data.real_eigenvalue, 
-                                data.abs_imag_eigenvalue, 
-                                data.c_k, 
-                                data.s_k, 
-                                data.occ_c, 
-                                data.occ_s, 
-                                data.block_size
-                            ));
-                        }
-                        res.decay_str.push('\n');
-                    }
-                }
             }
             res
             
