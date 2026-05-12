@@ -252,21 +252,18 @@ function compute_clik_spectrum(N::Int, Omega::Float64, gamma_plus::Float64, gamm
     M = (M + M') / 2.0
     
     println("Diagonalizing Effective Lindbladian via SVD...")
-    U, S_vals, V = svd(M)
-    
-    # S_vals are real and positive; discard numerical noise
-    keep_idx = findall(x -> x > 1e-13, S_vals)
-    
-    S_keep = Diagonal(S_vals[keep_idx])
-    U_keep = U[:, keep_idx]
-    
-    X = U_keep * inv(sqrt(S_keep))
+    U, S_vals, V = SVD_stabilized(M)
+
+    S_inv_sqrt_vals = [s > 1e-13 ? 1.0 / sqrt(s) : 0.0 for s in S_vals]
+    S_inv_sqrt = Diagonal(S_inv_sqrt_vals)
+
+    X = S_inv_sqrt * U'
+
     L_eff = X' * L_mat * X
-    
+
     spectra = eigen(L_eff)
     return spectra.values, spectra.vectors
 end
-
 # Execute
 N = 8
 Omega = 1.0
