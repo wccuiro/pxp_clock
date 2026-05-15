@@ -21,7 +21,7 @@ series_asym = data_asym.iloc[:, 3:]
 N = series_sym.shape[1] // 3
 
 # Define time axis (assuming dt=1e-3, t_final=10.0 based on the Rust code)
-time = np.linspace(0, 10.0, N)
+time = np.linspace(0, 50.0, N)
 
 # Create a figure with 3 subplots sharing the x-axis
 fig, axes = plt.subplots(3, 1, figsize=(10, 15), sharex=True)
@@ -45,8 +45,8 @@ for i in range(1,len(data_sym)):
     fid_asym = series_asym.iloc[i, 2::3].values
     
     # Plot Occupation Number
-    axes[0].plot(time, n_sym, color=colors(i), linestyle='-', label=f"Sym: {label_base}")
-    axes[0].plot(time, n_asym, color=colors(i), linestyle='--', label=f"Asym: {label_base}")
+    axes[0].plot(time, n_sym, color=colors(i), linestyle='-', label=f"Uniform: {label_base}")
+    axes[0].plot(time, n_asym, color=colors(i), linestyle='--', label=f"Staggered: {label_base}")
     
     # Plot NN Correlation
     axes[1].plot(time, nn_sym, color=colors(i), linestyle='-')
@@ -58,7 +58,7 @@ for i in range(1,len(data_sym)):
 
 # Formatting Top Panel (Occupation)
 axes[0].set_ylabel(r'Occupation Number $\langle n \rangle$')
-axes[0].set_title('Comparison: Symmetric vs Asymmetric Dissipation')
+axes[0].set_title('Comparison: Uniform vs Staggered Dissipation')
 axes[0].legend(loc='center left', bbox_to_anchor=(1, 0.5), fontsize='small')
 axes[0].grid(True)
 
