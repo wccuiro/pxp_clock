@@ -24,7 +24,7 @@ N = series_sym.shape[1] // 3
 time = np.linspace(0, 50.0, N)
 
 # Create a figure with 3 subplots sharing the x-axis
-fig, axes = plt.subplots(3, 1, figsize=(10, 15), sharex=True)
+# fig, axes = plt.subplots(3, 1, figsize=(10, 15), sharex=True)
 
 # Get a color map to differentiate parameter sets
 colors = plt.get_cmap('tab10', len(data_sym))
@@ -44,34 +44,44 @@ for i in range(1,len(data_sym)):
     nn_asym = series_asym.iloc[i, 1::3].values
     fid_asym = series_asym.iloc[i, 2::3].values
     
-    # Plot Occupation Number
-    axes[0].plot(time, n_sym, color=colors(i), linestyle='-', label=f"Uniform: {label_base}")
-    axes[0].plot(time, n_asym, color=colors(i), linestyle='--', label=f"Staggered: {label_base}")
+    # # Plot Occupation Number
+    # plt.plot(time, n_sym, color=colors(i), linestyle='-', label=f"Uniform: {label_base}")
+    # plt.plot(time, n_asym, color=colors(i), linestyle='--', label=f"Staggered: {label_base}")
     
-    # Plot NN Correlation
-    axes[1].plot(time, nn_sym, color=colors(i), linestyle='-')
-    axes[1].plot(time, nn_asym, color=colors(i), linestyle='--')
+    # plt.ylabel(r'Occupation Number $\langle n \rangle$')
+    # plt.title('Comparison: Uniform vs Staggered Dissipation')
+    # plt.legend(loc='center left', bbox_to_anchor=(1, 0.5), fontsize='small')
+    # plt.grid(True)
     
+    # plt.show()
+    
+    # # Plot NN Correlation
+    # plt.plot(time, nn_sym, color=colors(i), linestyle='-')
+    # plt.plot(time, nn_asym, color=colors(i), linestyle='--')
+    
+    # plt.ylabel(r'NN Correlation $\langle n_i n_{i+1} \rangle$')
+    # plt.grid(True)
+
+    # plt.show()
+
     # Plot Fidelity
-    axes[2].plot(time, fid_sym, color=colors(i), linestyle='-')
-    axes[2].plot(time, fid_asym, color=colors(i), linestyle='--')
+    plt.ylabel('Fidelity (Néel Overlap)')
+    plt.xlabel('Time')
+    plt.grid(True)
+
+    plt.plot(time, fid_sym, color=colors(i), linestyle='-', label=f"Uniform: {label_base}")
+    plt.plot(time, fid_asym, color=colors(i), linestyle='--', label=f"Staggered: {label_base}")
+
+plt.legend()
+plt.show()
 
 # Formatting Top Panel (Occupation)
-axes[0].set_ylabel(r'Occupation Number $\langle n \rangle$')
-axes[0].set_title('Comparison: Uniform vs Staggered Dissipation')
-axes[0].legend(loc='center left', bbox_to_anchor=(1, 0.5), fontsize='small')
-axes[0].grid(True)
 
 # Formatting Middle Panel (Correlation)
-axes[1].set_ylabel(r'NN Correlation $\langle n_i n_{i+1} \rangle$')
-axes[1].grid(True)
 
 # Formatting Bottom Panel (Fidelity)
-axes[2].set_ylabel('Fidelity (Néel Overlap)')
-axes[2].set_xlabel('Time')
-axes[2].grid(True)
 
 # Adjust layout and show/save
-plt.tight_layout()
-plt.savefig('comparison_plot.png', bbox_inches='tight', dpi=300)
-plt.show()
+# plt.tight_layout()
+# plt.savefig('comparison_plot.png', bbox_inches='tight', dpi=300)
+# plt.show()

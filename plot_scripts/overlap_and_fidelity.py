@@ -36,10 +36,10 @@ def plot_overlap_vs_imaginary(filename="decay.csv"):
         return
 
     # Create a 2x2 subplot grid
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    fig, axes = plt.subplots(4, 1, figsize=(7, 20))
     axes = axes.flatten()
     
-    fig.suptitle("Eigenspectrum Overlaps vs Imaginary Part", fontsize=16, fontweight='bold')
+    # fig.suptitle("Eigenspectrum Overlaps vs Imaginary Part", fontsize=16, fontweight='bold')
     
     for idx, ((gp, gm, omega), sector_list) in enumerate(grouped_data.items()):
         if idx >= 4:
@@ -53,16 +53,24 @@ def plot_overlap_vs_imaginary(filename="decay.csv"):
         
         for s_data in sector_list:
             sec_val = int(s_data['sector'])
-            ax.scatter(s_data['imag'], s_data['overlap_mag'], alpha=0.7, edgecolors='w', 
-                       linewidth=0.5, label=f"Sector {sec_val}")
+            ax.scatter(s_data['imag'], s_data['overlap_mag'], alpha=0.7, c="blue", edgecolors='w', 
+                       linewidth=0.5, label=rf"$\gamma_+={gp}$, $\gamma_-={gm}$")
             
-        ax.set_title(rf"$\gamma_+={gp}$, $\gamma_-={gm}$, $\Omega={omega}$")
-        ax.set_xlabel("Imaginary(Eigenvalue)")
-        ax.set_ylabel(r"$|W_k|$ (Overlap Magnitude)")
-        ax.grid(True, alpha=0.3)
+        # ax.set_title(rf"$\gamma_+={gp}$, $\gamma_-={gm}$, $\Omega={omega}$")
+        
+        ax.set_xlabel(r"Im($\lambda$)")
+        ax.set_ylabel(r"Overlap Magnitude")
+        ax.xaxis.grid(True, alpha=1, linestyle='--')
+        
+        
+        dE = 1.33
+        ax.set_xticks([dE * n for n in range(-6, 7)])
+        ax.set_xticklabels([r"$-6\Delta E$", r"$-5\Delta E$", r"$-4\Delta E$", r"$-3\Delta E$", r"$-2\Delta E$", r"$-\Delta E$", r"$0$", r"$\Delta E$", r"$2\Delta E$", r"$3\Delta E$", r"$4\Delta E$", r"$5\Delta E$", r"$6\Delta E$"], rotation=55)
+        
+        ax.plot()
         
         # Prevent the legend from crowding the plot if there are too many sectors
-        if len(sector_list) <= 10:
+        if len(sector_list) <= 1:
             ax.legend(fontsize='small')
             
     # Clean up any empty subplots if there happens to be fewer than 4 combinations
@@ -73,7 +81,7 @@ def plot_overlap_vs_imaginary(filename="decay.csv"):
     plt.show()
 
 
-def plot_fidelity_in_time(filename="occupation_time.csv", dt=1e-3):
+def plot_fidelity_in_time(filename="occupation_time_10.csv", dt=1e-3):
     """Plots only the exact numerical fidelity dynamics from Lindblad dynamics."""
     datasets = []
     
@@ -107,7 +115,7 @@ def plot_fidelity_in_time(filename="occupation_time.csv", dt=1e-3):
 
     # Plot all extracted fidelities on a single figure
     plt.figure(figsize=(10, 6))
-    for d in datasets:
+    for d in datasets[1:]:
         plt.plot(d['time'], d['fid_t'], label=d['label'], linewidth=2, alpha=0.8)
         
     plt.xlabel("Time")
@@ -121,4 +129,4 @@ def plot_fidelity_in_time(filename="occupation_time.csv", dt=1e-3):
 
 if __name__ == "__main__":
     plot_overlap_vs_imaginary("../rust/decay_12.csv")
-    plot_fidelity_in_time("../rust/occupation_time.csv", dt=1e-3)
+    plot_fidelity_in_time("../rust/occupation_time_w_fid.csv", dt=2e-4)
