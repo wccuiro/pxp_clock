@@ -803,7 +803,7 @@ pub fn operator_entanglement_entropy(
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let l = 8; 
+    let l = 6; 
     
     let basis = translationally_invariant_basis(l);
     let phases = precompute_phases(l);

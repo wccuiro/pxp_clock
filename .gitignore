@@ -7,6 +7,7 @@
 *.lock
 *.parquet
 *.txt
+*.pdf
 
 julia/*.so
 

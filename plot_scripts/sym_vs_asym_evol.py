@@ -2,86 +2,101 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 
-# Load data files
-file_sym = '../rust/occupation_time.csv'
-file_asym = '../rust/occupation_time_asymmetric.csv'
+# --- PRL Document Formatting Requirements ---
+plt.rcParams.update({
+    "font.family": "serif",
+    "font.size": 10,
+    "axes.labelsize": 12,          # Legible for a two-column document layout
+    "axes.titlesize": 11,
+    "legend.fontsize": 9,
+    "xtick.labelsize": 10,
+    "ytick.labelsize": 10,
+    "figure.figsize": (3.4, 8.5), # Standard PRL single-column width (3.4 inches)
+    "lines.linewidth": 1.5,
+    "xtick.direction": "in",
+    "ytick.direction": "in",
+    "xtick.top": True,
+    "ytick.right": True
+})
 
-# Read CSVs (no headers in the raw output)
-data_sym = pd.read_csv(file_sym, header=None)
-data_asym = pd.read_csv(file_asym, header=None)
+def plot_symmetry_comparison():
+    # Load data files
+    file_sym = '../rust/occupation_time.csv'
+    file_asym = '../rust/occupation_time_asymmetric.csv'
 
-# Extract parameters (first 3 columns: gamma_plus, gamma_minus, omega)
-params_sym = data_sym.iloc[:, 0:3]
+    try:
+        data_sym = pd.read_csv(file_sym, header=None)
+        data_asym = pd.read_csv(file_asym, header=None)
+    except FileNotFoundError as e:
+        print(f"Error loading files: {e}")
+        return
 
-# Extract time series data
-series_sym = data_sym.iloc[:, 3:]
-series_asym = data_asym.iloc[:, 3:]
+    # Extract parameters (first 3 columns: gamma_plus, gamma_minus, omega)
+    params_sym = data_sym.iloc[:, 0:3]
 
-# Calculate the number of time steps (3 observables per step)
-N = series_sym.shape[1] // 3
+    # Extract time series data
+    series_sym = data_sym.iloc[:, 3:]
+    series_asym = data_asym.iloc[:, 3:]
 
-# Define time axis (assuming dt=1e-3, t_final=10.0 based on the Rust code)
-time = np.linspace(0, 50.0, N)
+    # Calculate the number of time steps (3 observables per step)
+    N = series_sym.shape[1] // 3
+    time = np.linspace(0, 20.0, N)
 
-# Create a figure with 3 subplots sharing the x-axis
-# fig, axes = plt.subplots(3, 1, figsize=(10, 15), sharex=True)
-
-# Get a color map to differentiate parameter sets
-colors = plt.get_cmap('tab10', len(data_sym))
-
-# Loop through each row (parameter set) and plot
-for i in range(1,len(data_sym)):
-    gp, gm, omega = params_sym.iloc[i]
-    label_base = r"$\gamma_+$={gp}, $\gamma_-$={gm}, $\omega$={omega}".format(gp=gp, gm=gm, omega=omega)
+    # We assume 4 parameter sets based on the desired 4 subplots
+    num_plots = min(4, len(data_sym))
     
-    # Extract values for Symmetric
-    n_sym = series_sym.iloc[i, 0::3].values
-    nn_sym = series_sym.iloc[i, 1::3].values
-    fid_sym = series_sym.iloc[i, 2::3].values
+    fig, axs = plt.subplots(num_plots, 1, sharex=True)
+    if num_plots == 1:
+        axs = [axs]
+
+    subplot_labels = ['(a)', '(b)', '(c)', '(d)']
     
-    # Extract values for Asymmetric
-    n_asym = series_asym.iloc[i, 0::3].values
-    nn_asym = series_asym.iloc[i, 1::3].values
-    fid_asym = series_asym.iloc[i, 2::3].values
+    # Standard colors/linestyles for clarity in print and grayscale
+    color_sym = 'black'
+    ls_sym = '-'
+    color_asym = 'red'
+    ls_asym = '--'
+
+    for i in range(num_plots):
+        ax = axs[i]
+        
+        # Extract parameters for this row
+        gp, gm, omega = params_sym.iloc[i]
+        
+        # Extract Fidelity values (index 2, 5, 8...)
+        fid_sym = series_sym.iloc[i, 2::3].values
+        fid_asym = series_asym.iloc[i, 2::3].values
+        
+        ax.plot(time[:N//2], fid_sym[:N//2], color=color_sym, linestyle=ls_sym, label="Uniform")
+        ax.plot(time[:N//2], fid_asym[:N//2], color=color_asym, linestyle=ls_asym, label="Staggered")
+        
+        # --- Standard Subplot Labels ---
+        label_text = subplot_labels[i]
+        ax.text(-0.25, 0.93, label_text, transform=ax.transAxes,
+                fontsize=12, fontweight='bold', verticalalignment='top', horizontalalignment='left')
+        
+        # Parameter label box shifted right to clear the subplot letter identifier
+        textstr = rf"$\gamma_+={gp}, \gamma_-={gm}$"
+        ax.text(0.18, 0.93, textstr, transform=ax.transAxes,
+                fontsize=10, verticalalignment='top',
+                bbox=dict(boxstyle='round,pad=0.2', facecolor='white', alpha=0.8, edgecolor='lightgray'))
+        
+        ax.set_ylabel("Fidelity $F(t)$")
+        ax.grid(True, alpha=0.2)
+        
+        # Place legend in the top subplot only to avoid cluttering the figure
+        if i == 0:
+            ax.legend(loc='upper right', frameon=True, handlelength=2.5)
+
+    # Shared x-axis label on the bottom plot
+    axs[-1].set_xlabel("Time $t$")
+
+    plt.tight_layout()
+    plt.subplots_adjust(hspace=0.08) # Compact spacing for shared x-axes
     
-    # # Plot Occupation Number
-    # plt.plot(time, n_sym, color=colors(i), linestyle='-', label=f"Uniform: {label_base}")
-    # plt.plot(time, n_asym, color=colors(i), linestyle='--', label=f"Staggered: {label_base}")
-    
-    # plt.ylabel(r'Occupation Number $\langle n \rangle$')
-    # plt.title('Comparison: Uniform vs Staggered Dissipation')
-    # plt.legend(loc='center left', bbox_to_anchor=(1, 0.5), fontsize='small')
-    # plt.grid(True)
-    
-    # plt.show()
-    
-    # # Plot NN Correlation
-    # plt.plot(time, nn_sym, color=colors(i), linestyle='-')
-    # plt.plot(time, nn_asym, color=colors(i), linestyle='--')
-    
-    # plt.ylabel(r'NN Correlation $\langle n_i n_{i+1} \rangle$')
-    # plt.grid(True)
+    # Save as high-res PDF for LaTeX inclusion
+    plt.savefig('symmetry_vs_asymmetry_fidelity.pdf', bbox_inches='tight', dpi=300)
+    plt.show()
 
-    # plt.show()
-
-    # Plot Fidelity
-    plt.ylabel('Fidelity (Néel Overlap)')
-    plt.xlabel('Time')
-    plt.grid(True)
-
-    plt.plot(time, fid_sym, color=colors(i), linestyle='-', label=f"Uniform: {label_base}")
-    plt.plot(time, fid_asym, color=colors(i), linestyle='--', label=f"Staggered: {label_base}")
-
-plt.legend()
-plt.show()
-
-# Formatting Top Panel (Occupation)
-
-# Formatting Middle Panel (Correlation)
-
-# Formatting Bottom Panel (Fidelity)
-
-# Adjust layout and show/save
-# plt.tight_layout()
-# plt.savefig('comparison_plot.png', bbox_inches='tight', dpi=300)
-# plt.show()
+if __name__ == "__main__":
+    plot_symmetry_comparison()

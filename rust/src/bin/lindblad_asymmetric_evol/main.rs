@@ -280,7 +280,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             
             // Simulate directly across the complete coupled dynamics space
-            let total_obs = obs_evolution(&n_diag, &corr_diag, &basis_states, &rho_0, &l_cal_dense, neel_idx, 1e-3, 50.0);
+            let total_obs = obs_evolution(&n_diag, &corr_diag, &basis_states, &rho_0, &l_cal_dense, neel_idx, 1e-3, 20.0);
 
             let formatted_data = total_obs.iter()
                 .map(|(n, nn, fid)| format!("{:.16}, {:.16}, {:.16}", n, nn, fid))

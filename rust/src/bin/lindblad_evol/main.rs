@@ -1126,7 +1126,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 for (val, (row, col)) in l_cal_0.iter() { dense[[row, col]] = *val; }
                 dense
             };
-            let obs_0 = obs_evolution(l, &n_mat_0, &corr_mat_0, &basis_0, 0, &rho_0, &l_cal_dense_0, &neel_idx_0, 1e-3, 50.0);
+            let obs_0 = obs_evolution(l, &n_mat_0, &corr_mat_0, &basis_0, 0, &rho_0, &l_cal_dense_0, &neel_idx_0, 1e-3, 20.0);
 
             // --- Q = Pi Sector (Coherences) ---
             let l_cal_pi = build_lindbladian(l, &basis_pi, q_pi, omega, gamma_plus, gamma_minus);
@@ -1135,7 +1135,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 for (val, (row, col)) in l_cal_pi.iter() { dense[[row, col]] = *val; }
                 dense
             };
-            let obs_pi = obs_evolution(l, &n_mat_pi, &corr_mat_pi, &basis_pi, q_pi, &rho_pi, &l_cal_dense_pi, &neel_idx_pi, 1e-3, 50.0);
+            let obs_pi = obs_evolution(l, &n_mat_pi, &corr_mat_pi, &basis_pi, q_pi, &rho_pi, &l_cal_dense_pi, &neel_idx_pi, 1e-3, 20.0);
 
             // --- Construct Interference Sum ---
             let total_obs: Vec<(f64, f64, f64)> = obs_0.iter().zip(obs_pi.iter())
