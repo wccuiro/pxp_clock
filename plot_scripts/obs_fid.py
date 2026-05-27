@@ -1,6 +1,8 @@
 import numpy as np
+# import matplotlib as mpl
 import matplotlib.pyplot as plt
 from collections import defaultdict
+
 
 def plot_eigenvalue_overlaps(filename="decay.csv"):
     """Plots Overlap vs Real and Imaginary parts of the eigenvalues."""
@@ -261,8 +263,30 @@ def plot_fidelity_comparison(decay_filename="decay.csv", occ_filename="occupatio
         plt.tight_layout()
         plt.show()
 
+
 def plot_normalized_dynamics(filename="occupation_time.csv", dt=1e-4):
     """Plots the normalized observables grouped by observable to compare parameter sets."""
+    
+    # PRL style configurations
+    plt.rcParams.update({
+        'font.family': 'serif',
+        'mathtext.fontset': 'stix',
+        'font.size': 12,
+        'axes.labelsize': 12,
+        'legend.fontsize': 10,
+        'xtick.labelsize': 10,
+        'ytick.labelsize': 10,
+        'lines.linewidth': 1.0,
+        'axes.linewidth': 0.8,
+        'xtick.direction': 'in',
+        'ytick.direction': 'in',
+        'xtick.top': True,
+        'ytick.right': True,
+    })
+
+    fig_width = 3.375 
+    fig_height = 2.5  
+
     datasets = []
     
     try:
@@ -289,7 +313,7 @@ def plot_normalized_dynamics(filename="occupation_time.csv", dt=1e-4):
                 norm_fid = fid_t 
                 
                 datasets.append({
-                    'label': r"$\gamma_{+}=" + str(gp) + r", \gamma_{-}=" + str(gm) + r", \Omega=" + str(omega) + r"$",
+                    'label': fr"$\gamma_+={gp}, \gamma_-={gm}$",
                     'time': time,
                     'norm_n': norm_n,
                     'norm_nn': norm_nn,
@@ -304,41 +328,71 @@ def plot_normalized_dynamics(filename="occupation_time.csv", dt=1e-4):
         print("No valid data found in file.")
         return
 
-    plt.figure(figsize=(10, 6))
-    for d in datasets[1::]:
-        plt.plot(d['time'], d['norm_n'], label=d['label'], linewidth=2, alpha=0.8)
-    plt.axhline(0, color='black', linestyle='--', alpha=0.5)
-    plt.xlabel("Time")
-    plt.ylabel(r"$\frac{\langle n(t) \rangle - \langle n \rangle_{ss}}{\langle n(0) \rangle - \langle n \rangle_{ss}}$")
-    plt.title("Normalized Occupation Dynamics")
-    plt.legend(loc='best')
-    plt.grid(True, alpha=0.3)
+    # Define distinct styles for B&W printing
+    linestyles = ['-', '--', '-.', ':', (0, (3, 1, 1, 1, 1, 1))]
+    markers = ['o', 's', '^', 'D', 'v']
+
+    # --- Plot 1: Normalized Occupation ---
+    fig1, ax1 = plt.subplots(figsize=(fig_width, fig_height))
+    for i, d in enumerate(datasets[1:]): # Changed [1::] to standard [1:]
+        style_idx = i % len(linestyles)
+        ax1.plot(d['time'], d['norm_n'], 
+                 label=d['label'],
+                 linestyle=linestyles[style_idx],
+                 marker=markers[style_idx],
+                 markevery=0.1,    # Places 10 markers evenly across the line
+                 markersize=4,     # Keeps markers small enough not to overwhelm
+                 fillstyle='none') # Open markers print better in B&W when lines overlap
+                 
+    ax1.axhline(0, color='black', linestyle='-', linewidth=0.5, alpha=0.5)
+    ax1.set_xlabel("Time")
+    ax1.set_ylabel(r"$\frac{\langle n(t) \rangle - \langle n \rangle_{ss}}{\langle n(0) \rangle - \langle n \rangle_{ss}}$")
+    ax1.legend(loc='best', frameon=False)
+    fig1.tight_layout(pad=0.5)
     plt.show()
 
-    plt.figure(figsize=(10, 6))
-    for d in datasets[1::]:
-        plt.plot(d['time'], d['norm_nn'], label=d['label'], linewidth=2, alpha=0.8)
-    plt.axhline(0, color='black', linestyle='--', alpha=0.5)
-    plt.xlabel("Time")
-    plt.ylabel(r"$\frac{\langle nn(t) \rangle - \langle nn \rangle_{ss}}{\langle nn(0) \rangle - \langle nn \rangle_{ss}}$")
-    plt.title("Normalized NN Correlation Dynamics")
-    plt.legend(loc='best')
-    plt.grid(True, alpha=0.3)
+    # --- Plot 2: Normalized NN Correlation ---
+    fig2, ax2 = plt.subplots(figsize=(fig_width, fig_height))
+    for i, d in enumerate(datasets[1:]):
+        style_idx = i % len(linestyles)
+        ax2.plot(d['time'], d['norm_nn'], 
+                 label=d['label'],
+                 linestyle=linestyles[style_idx],
+                 marker=markers[style_idx],
+                 markevery=0.1,
+                 markersize=4,
+                 fillstyle='none')
+                 
+    ax2.axhline(0, color='black', linestyle='-', linewidth=0.5, alpha=0.5)
+    ax2.set_xlabel("Time")
+    ax2.set_ylabel(r"$\frac{\langle nn(t) \rangle - \langle nn \rangle_{ss}}{\langle nn(0) \rangle - \langle nn \rangle_{ss}}$")
+    ax2.legend(loc='best', frameon=False)
+    fig2.tight_layout(pad=0.5)
     plt.show()
 
-    plt.figure(figsize=(10, 6))
-    for d in datasets[1::]:
-        plt.plot(d['time'], d['norm_fid'], label=d['label'], linewidth=2, alpha=0.8)
-    plt.axhline(0, color='black', linestyle='--', alpha=0.5)
-    plt.xlabel("Time")
-    plt.ylabel(r"$\frac{O(t) - O_{ss}}{O(0) - O_{ss}}$")
-    plt.title("Normalized Fidelity / Overlap Dynamics")
-    plt.legend(loc='best')
-    plt.grid(True, alpha=0.3)
+    # --- Plot 3: Fidelity ---
+    fig3, ax3 = plt.subplots(figsize=(fig_width, fig_height))
+    for i, d in enumerate(datasets[1:]):
+        style_idx = i % len(linestyles)
+        ax3.plot(d['time'], d['norm_fid'], 
+                 label=d['label'],
+                 linestyle=linestyles[style_idx],
+                #  marker=markers[style_idx],
+                 markevery=0.1,
+                 markersize=4,
+                 fillstyle='none')
+                 
+    ax3.axhline(0, color='black', linestyle='-', linewidth=0.5, alpha=0.5)
+    ax3.set_xlabel("Time")
+    ax3.set_ylabel(r"Fidelity $F(t)$")
+    ax3.legend(loc='best', frameon=False)
+    fig3.tight_layout(pad=0.5)
     plt.show()
+
+
 
 if __name__ == "__main__":
-    plot_eigenvalue_overlaps("../rust/decay_12.csv")
-    plot_scar_decomposition("../rust/decay_12.csv", t_max=10.0, dt=1e-3)
-    plot_fidelity_comparison("../rust/decay_12.csv", "../rust/occupation_time.csv", dt=1e-3)
+    # plot_eigenvalue_overlaps("../rust/decay_12.csv")
+    # plot_scar_decomposition("../rust/decay_12.csv", t_max=10.0, dt=1e-3)
+    # plot_fidelity_comparison("../rust/decay_12.csv", "../rust/occupation_time.csv", dt=1e-3)
     plot_normalized_dynamics("../rust/occupation_time.csv", dt=1e-3)
