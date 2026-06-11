@@ -263,6 +263,39 @@ end
 # -----------------------------------------------------------------------------
 
 """
+    build_neel_state(sites)
+
+Constructs the vectorized density matrix for the Néel state |1010...><1010...|.
+In the PXP model, 1 is "Up" (Rydberg) and 0 is "Dn" (Ground).
+"""
+function build_neel_state(sites)
+    N = div(length(sites), 2)
+    state_str = String[]
+    for j in 1:N
+        # Choose the staggered physical state: Up for odd j, Dn for even j
+        phys_state = isodd(j) ? "Up" : "Dn"
+        
+        # Vectorization: |psi><psi| -> |psi>_k |psi>_b
+        # Both the ket (odd index) and bra (even index) get the same physical state
+        push!(state_str, phys_state) 
+        push!(state_str, phys_state) 
+    end
+    return MPS(sites, state_str)
+end
+
+"""
+    compute_neel_overlap(rho, rho_neel)
+
+Computes the fidelity F = <psi_neel | rho | psi_neel>.
+In the vectorized space, this is exactly the inner product <<rho_neel | rho>>.
+"""
+function compute_neel_overlap(rho::MPS, rho_neel::MPS)
+    # The inner function computes the overlap of two MPS.
+    # We take the real part to discard any floating-point imaginary artifacts.
+    return real(inner(rho_neel, rho))
+end
+
+"""
     run_evolution(rho_init, sites, H_solver, dt, t_total)
 
 Evolves the state, normalizes, and measures occupation at each step.
@@ -308,91 +341,122 @@ function run_evolution_TDVP(rho_init, sites, H_solver, dt, t_total)
     return times, occupations
 end
 
-function run_evolution_TEBD(rho_init, sites, Omega, gamma_plus, gamma_minus, dt, t_total)
-    rho = copy(rho_init)
+function hermitize_mps(rho::MPS, sites; cutoff=1e-10)
+    # 1. Complex conjugate the state
+    rho_dag = copy(rho)
+    for i in 1:length(rho_dag)
+        rho_dag[i] = conj(rho_dag[i])
+    end
     
-    # # Pre-construct the trace operator
-    # tr_mps = create_trace_mps(sites)
+    # 2. Swap the ket and bra physical indices
+    N = div(length(sites), 2)
+    for j in 1:N
+        k_idx = 2*j - 1
+        b_idx = 2*j
+        # Construct the SWAP gate for the adjacent ket and bra
+        swap_gate = op("Swap", sites[k_idx], sites[b_idx])
+        
+        # Apply the SWAP gate
+        rho_dag = apply(swap_gate, rho_dag; cutoff=cutoff)
+    end
+    
+    # 3. Average the original state and its conjugate
+    # In ITensors, you can add two MPSs using the + operator with a cutoff
+    rho_herm = +(rho, rho_dag; cutoff=cutoff)
+    rho_herm /= 2.0
+    
+    return rho_herm
+end
+
+function run_evolution_TEBD(rho_init, rho_neel, sites, Omega, gamma_plus, gamma_minus, dt, t_total)
+    rho = copy(rho_init)
     
     times = Float64[]
     occupations = Float64[]
+    overlaps = Float64[]
     
-    # Time loop
-    # We perform steps: Normalize -> Measure -> Evolve
     for t in 0:dt:t_total
-        # 1. Normalize <1|rho> = 1
+        # 1. Enforce Hermiticity
+        rho = hermitize_mps(rho, sites; cutoff=1e-10)
+
+        # 2. Normalize <1|rho> = 1
         z = trace_mps(rho, sites)
-        # Avoid division by zero if dynamics are weird, though shouldn't happen
-        if abs(z) > 1e-14
-            rho /= z
+        if abs(real(z)) > 1e-14
+            rho /= real(z)
         end
         
-        # 2. Measure Average Occupation
+        # 3. Measurements
         avg_occ = compute_average_occupation(rho, sites)
+        overlap = compute_neel_overlap(rho, rho_neel)
         
         # Store results
         push!(times, t)
         push!(occupations, avg_occ)
+        push!(overlaps, overlap)
         
-        println(@sprintf("Time: %.3f | Trace: %.5f | Imag Trace: %.5f | Avg Occ: %.5f", t, real(z), imag(z), avg_occ))
+        println(@sprintf("Time: %.3f | Trace: %.5f | Avg Occ: %.5f | Néel Overlap: %.5f", 
+                         t, real(z), avg_occ, overlap))
         
-        # 3.1 Alternatively, use TEBD with local gates:
+        # 4. Evolve one step
         rho = tebd_step!(rho, sites, Omega, gamma_plus, gamma_minus, dt; cutoff=1e-10, maxdim=200)
     end
     
-    return times, occupations
+    return times, occupations, overlaps
 end
-
-
 
 # -----------------------------------------------------------------------------
 # 4. Main Function
 # -----------------------------------------------------------------------------
 
 function main()
-    # A. Parameters
-    N = 20                # Physical sites
-    Omega = 1.0           # Rabi frequency
-    gamma_plus = 0.2           # Pumping strength
-    gamma_minus = 0.001          # Sraining strength
+    # Define an array of NamedTuples for your parameter sweeps.
+    # You can easily add or modify rows here to run different configurations.
+    param_sets = [
+        (N=20, Omega=1.0, gamma_plus=0.001, gamma_minus=0.001, dt=0.1, t_total=25.0),
+        (N=20, Omega=1.0, gamma_plus=0.001, gamma_minus=0.2, dt=0.1, t_total=25.0),
+        (N=20, Omega=1.0, gamma_plus=0.2,   gamma_minus=0.001, dt=0.1, t_total=25.0),
+        (N=20, Omega=1.0, gamma_plus=0.2,   gamma_minus=0.2, dt=0.1, t_total=25.0)
+    ]
 
-    dt = 0.1             # Time step
-    t_total = 25.0         # Final time
-    output_file = "occupation_dynamics_gm.txt"
+    println("--- Starting Parameter Sweep for Dissipative OmegaPXP Model ---")
+    println("Total configurations to run: $(length(param_sets))\n")
 
-    println("--- Simulating Dissipative OmegaPXP Model ---")
-    println("Sites: $N, Omega: $Omega, Gamma+: $gamma_plus, Gamma-: $gamma_minus")
+    for (i, p) in enumerate(param_sets)
+        println("==================================================================")
+        println("Run $i / $(length(param_sets))")
+        println("Parameters: N=$(p.N), Omega=$(p.Omega), Gamma+=$(p.gamma_plus), Gamma-=$(p.gamma_minus)")
+        println("==================================================================")
 
-    # B. Define Sites (Doubled space)
-    # Odd indices = Ket, Even indices = Bra
-    sites = siteinds("S=1/2", 2*N)
+        # Generate a unique filename for this specific parameter set
+        output_file = "occupation_dynamics_N$(p.N)_W$(p.Omega)_gp$(p.gamma_plus)_gm$(p.gamma_minus).txt"
 
-    # C. Build Lindbladian
-    println("Building Lindbladian...")
-    H_solver = build_lindbladian(sites, Omega, gamma_plus, gamma_minus)
+        # B. Define Sites (Doubled space) 
+        # Kept inside the loop in case you want to sweep over different N values
+        sites = siteinds("S=1/2", 2 * p.N)
 
-    # D. Initial State: All Ground State |00...0>
-    # In PXP, Ground = Down (|0>).
-    # Vectorized |0><0| -> |0>_k |0>_b
-    init_state_str = [isodd(i) ? "Dn" : "Dn" for i in 1:2*N]
-    rho_init = MPS(sites, init_state_str)
+        # C. Build Initial State: Néel State
+        println("Building initial Néel state...")
+        rho_neel = build_neel_state(sites)
+        rho_init = copy(rho_neel) # Set the starting state to the Néel state
 
-    # E. Run Evolution
-    println("Starting Evolution...")
-    # times, occs = run_evolution_TDVP(rho_init, sites, H_solver, dt, t_total)
+        # D. Run Evolution
+        println("Starting Evolution...")
+        times, occs, overlaps = run_evolution_TEBD(
+            rho_init, rho_neel, sites, p.Omega, p.gamma_plus, p.gamma_minus, p.dt, p.t_total
+        )
 
-    # Alternatively, use TEBD:
-    times, occs = run_evolution_TEBD(rho_init, sites, Omega, gamma_plus, gamma_minus, dt, t_total)
-
-    # F. Save Results
-    println("Saving results to $output_file...")
-    open(output_file, "w") do io
-        write(io, "Time\tAvgOccupation\n")
-        for (t, o) in zip(times, occs)
-            write(io, "$t\t$o\n")
+        # E. Save Results
+        println("Saving results to $output_file...")
+        open(output_file, "w") do io
+            write(io, "Time\tAvgOccupation\tNeelOverlap\n")
+            for (t, o, f) in zip(times, occs, overlaps)
+                write(io, "$t\t$o\t$f\n")
+            end
         end
+        println("Run $i Done.\n")
     end
-    println("Done.")
+    
+    println("--- All Simulations Complete! ---")
 end
 
 # Run the simulation
