@@ -10,28 +10,22 @@ else
 end
 
 # 2. @everywhere block: Everything inside this block is compiled and loaded 
-# onto ALL 114 worker processes, not just the master node.
+# onto ALL worker processes, not just the master node.
 @everywhere begin
     using ITensors
     using ITensorMPS
     using LinearAlgebra
 end
 
-# 2. Configure the dense math threads and explicitly kill the nested Strided threads
+# 3. Configure the dense math threads and explicitly kill the nested Strided threads
 @everywhere begin
-    using ITensors
-    using ITensorMPS
-    using LinearAlgebra
-end
-
-@everywhere begin
-    # 1. Unleash BLAS for Dense Matrix Operations (This does all the real work)
+    # Unleash BLAS for Dense Matrix Operations
     BLAS.set_num_threads(Threads.nthreads())
 
-    # 2. Explicitly disable Block-Sparse threading to prevent the warning
+    # Explicitly disable Block-Sparse threading to prevent the warning
     ITensors.disable_threaded_blocksparse()
 
-    # 3. Disable Strided to prevent internal nested threading
+    # Disable Strided to prevent internal nested threading
     NDTensors.Strided.disable_threads()
     
     worker_id = myid()
@@ -104,26 +98,61 @@ end
     # Lindbladian TEBD Gates
     # -------------------------------------------------------------------------
 
-    function local_gate(sites, j, Omega, gamma_plus, gamma_minus, dt)
+    function local_gate(sites, j, Omega, gamma_plus, gamma_minus, alpha, dt)
         k(i) = 2*i - 1
         b(i) = 2*i
 
         sub_sites = sites[[k(j-1), b(j-1), k(j), b(j), k(j+1), b(j+1)]]
         os = OpSum()
 
+        # Coherent Hamiltonian Term (Retained as full projection per specific jump-operator instructions)
         os += -2im*Omega, "ProjDn",1, "Sx",3, "ProjDn",5
         os += +2im*Omega, "ProjDn",2, "Sx",4, "ProjDn",6
 
+        # --- Partial Projection Coefficients ---
+        # P(alpha) = c_up * P_up + 1.0 * P_dn
+        c_up = (1.0 - alpha) / (1.0 + alpha)
+        c_sq = c_up^2  # Since P(alpha) is not a true projector, P(alpha)^2 != P(alpha)
+
+        ops_P = [("ProjUp", c_up), ("ProjDn", 1.0)]
+        ops_Psq = [("ProjUp", c_sq), ("ProjDn", 1.0)]
+
+        # --- Gamma Plus Jump Operators ---
         if gamma_plus > 0
-            os += gamma_plus,      "ProjDn",1,"ProjDn",2,"S+",3,"S+",4,"ProjDn",5,"ProjDn",6
-            os += -0.5*gamma_plus, "ProjDn",1,"ProjDn",3,"ProjDn",5
-            os += -0.5*gamma_plus, "ProjDn",2,"ProjDn",4,"ProjDn",6
+            # L_+ rho L_+^\dagger term (indices 1, 2, 5, 6)
+            for op1 in ops_P, op2 in ops_P, op5 in ops_P, op6 in ops_P
+                coeff = gamma_plus * op1[2] * op2[2] * op5[2] * op6[2]
+                os += coeff, op1[1],1, op2[1],2, "S+",3, "S+",4, op5[1],5, op6[1],6
+            end
+            # -0.5 L_+^\dagger L_+ rho term (indices 1, 3, 5). Note: S- S+ = ProjDn
+            for op1 in ops_Psq, op5 in ops_Psq
+                coeff = -0.5 * gamma_plus * op1[2] * op5[2]
+                os += coeff, op1[1],1, "ProjDn",3, op5[1],5
+            end
+            # -0.5 rho L_+^\dagger L_+ term (indices 2, 4, 6)
+            for op2 in ops_Psq, op6 in ops_Psq
+                coeff = -0.5 * gamma_plus * op2[2] * op6[2]
+                os += coeff, op2[1],2, "ProjDn",4, op6[1],6
+            end
         end
 
+        # --- Gamma Minus Jump Operators ---
         if gamma_minus > 0
-            os += gamma_minus,      "ProjDn",1,"ProjDn",2,"S-",3,"S-",4,"ProjDn",5,"ProjDn",6
-            os += -0.5*gamma_minus, "ProjDn",1,"ProjUp",3,"ProjDn",5
-            os += -0.5*gamma_minus, "ProjDn",2,"ProjUp",4,"ProjDn",6
+            # L_- rho L_-^\dagger term (indices 1, 2, 5, 6)
+            for op1 in ops_P, op2 in ops_P, op5 in ops_P, op6 in ops_P
+                coeff = gamma_minus * op1[2] * op2[2] * op5[2] * op6[2]
+                os += coeff, op1[1],1, op2[1],2, "S-",3, "S-",4, op5[1],5, op6[1],6
+            end
+            # -0.5 L_-^\dagger L_- rho term (indices 1, 3, 5). Note: S+ S- = ProjUp
+            for op1 in ops_Psq, op5 in ops_Psq
+                coeff = -0.5 * gamma_minus * op1[2] * op5[2]
+                os += coeff, op1[1],1, "ProjUp",3, op5[1],5
+            end
+            # -0.5 rho L_-^\dagger L_- term (indices 2, 4, 6)
+            for op2 in ops_Psq, op6 in ops_Psq
+                coeff = -0.5 * gamma_minus * op2[2] * op6[2]
+                os += coeff, op2[1],2, "ProjUp",4, op6[1],6
+            end
         end
 
         L_local = MPO(os, sub_sites)
@@ -132,24 +161,21 @@ end
         return gate
     end
 
-    function tebd_step!(rho, sites, Omega, gamma_plus, gamma_minus, dt; cutoff=1e-10, maxdim=200)
+    function tebd_step!(rho, sites, Omega, gamma_plus, gamma_minus, alpha, dt; cutoff=1e-10, maxdim=200)
         N = div(length(sites), 2)
 
-        # Layer A
         for j in 2:3:(N-1)
-            gate = local_gate(sites, j, Omega, gamma_plus, gamma_minus, dt)
+            gate = local_gate(sites, j, Omega, gamma_plus, gamma_minus, alpha, dt)
             rho = apply(gate, rho; cutoff=cutoff, maxdim=maxdim)
         end
 
-        # Layer B
         for j in 3:3:(N-1)
-            gate = local_gate(sites, j, Omega, gamma_plus, gamma_minus, dt)
+            gate = local_gate(sites, j, Omega, gamma_plus, gamma_minus, alpha, dt)
             rho = apply(gate, rho; cutoff=cutoff, maxdim=maxdim)
         end
 
-        # Layer C
         for j in 4:3:(N-1)
-            gate = local_gate(sites, j, Omega, gamma_plus, gamma_minus, dt)
+            gate = local_gate(sites, j, Omega, gamma_plus, gamma_minus, alpha, dt)
             rho = apply(gate, rho; cutoff=cutoff, maxdim=maxdim)
         end
 
@@ -160,7 +186,7 @@ end
     # Time Evolution Routine
     # -------------------------------------------------------------------------
 
-    function run_evolution_TEBD(rho_init, rho_neel, sites, Omega, gamma_plus, gamma_minus, dt, t_total)
+    function run_evolution_TEBD(rho_init, rho_neel, sites, Omega, gamma_plus, gamma_minus, alpha, dt, t_total)
         rho = copy(rho_init)
         
         times = Float64[]
@@ -168,16 +194,13 @@ end
         overlaps = Float64[]
         
         for t in 0:dt:t_total
-            # Enforce Hermiticity
             rho = hermitize_mps(rho, sites; cutoff=1e-10)
 
-            # Normalize using strictly the real part
             z = trace_mps(rho, sites)
             if abs(real(z)) > 1e-14
                 rho /= real(z)
             end
             
-            # Measurements
             avg_occ = compute_average_occupation(rho, sites)
             overlap = compute_neel_overlap(rho, rho_neel)
             
@@ -185,8 +208,7 @@ end
             push!(occupations, avg_occ)
             push!(overlaps, overlap)
             
-            # Evolve
-            rho = tebd_step!(rho, sites, Omega, gamma_plus, gamma_minus, dt; cutoff=1e-10, maxdim=200)
+            rho = tebd_step!(rho, sites, Omega, gamma_plus, gamma_minus, alpha, dt; cutoff=1e-10, maxdim=200)
         end
         
         return times, occupations, overlaps
@@ -200,39 +222,34 @@ end # End of @everywhere block
 
 function main()
     # 1. Define your parameter sweep
-    # We use Julia comprehensions to build a large array of configurations.
-    # Adjust ranges to match however many runs you need for your data.
     gamma_plus_range  = [0.001, 0.2]
     gamma_minus_range = [0.001, 0.2]
+    alpha_range       = [0.0, 0.3, 0.6, 1.0] # Added alpha sweep
     
     param_sets = [
-        (N=10, Omega=1.0, gp=gp, gm=gm, dt=0.1, t_total=25.0) 
-        for gp in gamma_plus_range for gm in gamma_minus_range
+        (N=10, Omega=1.0, gp=gp, gm=gm, alpha=a, dt=0.1, t_total=25.0) 
+        for gp in gamma_plus_range for gm in gamma_minus_range for a in alpha_range
     ]
 
     println("--- Starting Distributed Parameter Sweep ---")
     println("Total configurations to run: $(length(param_sets))")
 
     # 2. Distribute the work using pmap
-    # pmap acts like a for-loop, but automatically sends each parameter set 'p' 
-    # to the next available idle worker process.
     pmap(param_sets) do p
-        worker_id = myid() # Identify which core is running this job
-        println("[Worker $worker_id] Starting: gp=$(p.gp), gm=$(p.gm)")
+        worker_id = myid() 
+        println("[Worker $worker_id] Starting: gp=$(p.gp), gm=$(p.gm), alpha=$(p.alpha)")
 
-        output_file = "data_N$(p.N)_W$(p.Omega)_gp$(p.gp)_gm$(p.gm).txt"
+        # Updated output format to include alpha
+        output_file = "data_N$(p.N)_W$(p.Omega)_gp$(p.gp)_gm$(p.gm)_a$(p.alpha).txt"
 
-        # Initialize isolated sites and states on this specific worker
         sites = siteinds("S=1/2", 2 * p.N)
         rho_neel = build_neel_state(sites)
         rho_init = copy(rho_neel) 
 
-        # Run Evolution
         times, occs, overlaps = run_evolution_TEBD(
-            rho_init, rho_neel, sites, p.Omega, p.gp, p.gm, p.dt, p.t_total
+            rho_init, rho_neel, sites, p.Omega, p.gp, p.gm, p.alpha, p.dt, p.t_total
         )
 
-        # File I/O is safe because every configuration gets a unique filename
         open(output_file, "w") do io
             write(io, "Time\tAvgOccupation\tNeelOverlap\n")
             for (t, o, f) in zip(times, occs, overlaps)
@@ -240,11 +257,10 @@ function main()
             end
         end
         
-        println("[Worker $worker_id] Finished: gp=$(p.gp), gm=$(p.gm)")
+        println("[Worker $worker_id] Finished: gp=$(p.gp), gm=$(p.gm), alpha=$(p.alpha)")
     end
     
     println("--- All Simulations Complete! ---")
 end
 
-# Run the master function
 @time main()

@@ -111,19 +111,25 @@ end
         sub_sites = sites[[k(j-1), b(j-1), k(j), b(j), k(j+1), b(j+1)]]
         os = OpSum()
 
+        # Coherent PXP evolution
         os += -2im*Omega, "ProjDn",1, "Sx",3, "ProjDn",5
         os += +2im*Omega, "ProjDn",2, "Sx",4, "ProjDn",6
 
-        if gamma_plus > 0
-            os += gamma_plus,      "ProjDn",1,"ProjDn",2,"S+",3,"S+",4,"ProjDn",5,"ProjDn",6
-            os += -0.5*gamma_plus, "ProjDn",1,"ProjDn",3,"ProjDn",5
-            os += -0.5*gamma_plus, "ProjDn",2,"ProjDn",4,"ProjDn",6
-        end
-
-        if gamma_minus > 0
-            os += gamma_minus,      "ProjDn",1,"ProjDn",2,"S-",3,"S-",4,"ProjDn",5,"ProjDn",6
-            os += -0.5*gamma_minus, "ProjDn",1,"ProjUp",3,"ProjDn",5
-            os += -0.5*gamma_minus, "ProjDn",2,"ProjUp",4,"ProjDn",6
+        # Staggered Dissipation to match Neel state (Odd=Up, Even=Dn)
+        if isodd(j)
+            # Pump odd sites to "Up" using \sigma^+
+            if gamma_plus > 0
+                os += gamma_plus,      "ProjDn",1,"ProjDn",2,"S+",3,"S+",4,"ProjDn",5,"ProjDn",6
+                os += -0.5*gamma_plus, "ProjDn",1,"ProjDn",3,"ProjDn",5
+                os += -0.5*gamma_plus, "ProjDn",2,"ProjDn",4,"ProjDn",6
+            end
+        else
+            # Pump even sites to "Dn" using \sigma^-
+            if gamma_minus > 0
+                os += gamma_minus,      "ProjDn",1,"ProjDn",2,"S-",3,"S-",4,"ProjDn",5,"ProjDn",6
+                os += -0.5*gamma_minus, "ProjDn",1,"ProjUp",3,"ProjDn",5
+                os += -0.5*gamma_minus, "ProjDn",2,"ProjUp",4,"ProjDn",6
+            end
         end
 
         L_local = MPO(os, sub_sites)
@@ -220,7 +226,7 @@ function main()
         worker_id = myid() # Identify which core is running this job
         println("[Worker $worker_id] Starting: gp=$(p.gp), gm=$(p.gm)")
 
-        output_file = "data_N$(p.N)_W$(p.Omega)_gp$(p.gp)_gm$(p.gm).txt"
+        output_file = "data_N$(p.N)_W$(p.Omega)_gp$(p.gp)_gm$(p.gm)_staggered.txt"
 
         # Initialize isolated sites and states on this specific worker
         sites = siteinds("S=1/2", 2 * p.N)
