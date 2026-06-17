@@ -240,7 +240,7 @@ function main()
         println("[Worker $worker_id] Starting: gp=$(p.gp), gm=$(p.gm), alpha=$(p.alpha)")
 
         # Updated output format to include alpha
-        output_file = "data_N$(p.N)_W$(p.Omega)_gp$(p.gp)_gm$(p.gm)_a$(p.alpha).txt"
+        output_file = "data_N$(p.N)_dt$(p.dt)_gp$(p.gp)_gm$(p.gm)_a$(p.alpha).txt"
 
         sites = siteinds("S=1/2", 2 * p.N)
         rho_neel = build_neel_state(sites)
