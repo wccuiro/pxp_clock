@@ -1015,8 +1015,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ----------------------------------------------------------------
     // 1. SYSTEM SETUP (Single Threaded / Setup Phase)
     // ----------------------------------------------------------------
-    let l = 8;
+    let l = 10;
     let _q_sector = 0;
+    let total_time = 25.0;
+    let dt = 1e-2;
     
 // --- Basis Construction ---
     let basis = translationally_invariant_basis(l);    
@@ -1092,8 +1094,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ----------------------------------------------------------------
     // 2. PARAMETER SWEEP PREPARATION
     // ----------------------------------------------------------------
-    let gp_values = Array1::linspace(0.001, 0.2, 2);
-    let gm_values = Array1::linspace(0.001, 0.2, 2);
+    let gp_values = Array1::linspace(0.001, 0.2, 1);
+    let gm_values = Array1::linspace(0.001, 0.2, 1);
     let omega_values = Array1::linspace(1.0, 2.0, 1);
 
     // Flatten parameters into a single vector of pairs (g, omega)
@@ -1126,7 +1128,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 for (val, (row, col)) in l_cal_0.iter() { dense[[row, col]] = *val; }
                 dense
             };
-            let obs_0 = obs_evolution(l, &n_mat_0, &corr_mat_0, &basis_0, 0, &rho_0, &l_cal_dense_0, &neel_idx_0, 1e-3, 20.0);
+            let obs_0 = obs_evolution(l, &n_mat_0, &corr_mat_0, &basis_0, 0, &rho_0, &l_cal_dense_0, &neel_idx_0, dt, total_time);
 
             // --- Q = Pi Sector (Coherences) ---
             let l_cal_pi = build_lindbladian(l, &basis_pi, q_pi, omega, gamma_plus, gamma_minus);
@@ -1135,7 +1137,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 for (val, (row, col)) in l_cal_pi.iter() { dense[[row, col]] = *val; }
                 dense
             };
-            let obs_pi = obs_evolution(l, &n_mat_pi, &corr_mat_pi, &basis_pi, q_pi, &rho_pi, &l_cal_dense_pi, &neel_idx_pi, 1e-3, 20.0);
+            let obs_pi = obs_evolution(l, &n_mat_pi, &corr_mat_pi, &basis_pi, q_pi, &rho_pi, &l_cal_dense_pi, &neel_idx_pi, dt, total_time);
 
             // --- Construct Interference Sum ---
             let total_obs: Vec<(f64, f64, f64)> = obs_0.iter().zip(obs_pi.iter())

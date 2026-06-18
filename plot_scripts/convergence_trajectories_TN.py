@@ -4,31 +4,45 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
-def plot_occupation_dynamics(filename, ax):
-    """
-    Reads the updated occupation_dynamics.txt format using explicit 
-    Time and AvgOccupation columns.
-    """
-    try:
-        # Use a regex separator \s+ to handle any combination of spaces/tabs
-        df = pd.read_csv(filename, sep=r'\s+')
-        
-        # Verify the necessary columns exist to prevent silent failures
-        if 'Time' not in df.columns or 'AvgOccupation' not in df.columns:
-            print(f"Error: Expected columns 'Time' and 'AvgOccupation' missing in {filename}.")
-            return 0
-            
-        ax.plot(df['Time'], df['AvgOccupation'], label='Lindblad Trajectory', 
-                alpha=1, linewidth=3.0, linestyle='--', color='orange')
-        
-        return 1 # Represents one trajectory plotted
+"""
+This script provides functions to plot the time evolution of the occupation number n, the correlation and the fidelity and compares them with the ensamble average of multiple trajectories. 
+The data of the exact time evolution is expected to be in a CSV file with the following format:
+gamma_plus, gamma_minus, omega, n_0, nn_0, fidelity_0, n_1, nn_1, fidelity_1, ..., n_N, nn_N, fidelity_N
 
-    except FileNotFoundError:
-        print(f"Error: File {filename} not found.")
-        return 0
-    except Exception as e:
-        print(f"Error reading {filename}: {e}")
-        return 0
+the data of each trajectory is expected to be in a CSV file with the following format:
+time, n, nn, fidelity
+"""
+
+
+def plot_occupation_dynamics(filename, ax, dt=1e-2):
+    lines_plotted = 0
+    
+    with open(filename, 'r') as f:
+        for line in f:
+            if not line.strip():
+                continue
+                
+            parts = [p.strip() for p in line.split(',') if p.strip()]
+            
+            if len(parts) < 3:
+                continue
+                
+            g = float(parts[0])
+            omega = float(parts[1])
+            
+            n_values = [float(parts[i]) for i in range(3, len(parts), 3)]
+            
+            # Scale the index by dt to align with the actual time axis
+            time_axis = [i * dt for i in range(len(n_values))]
+            
+            ax.plot(time_axis, n_values, label=f'g={g}, omega={omega}', 
+                    alpha=1, linewidth=3.0, linestyle='--')
+            lines_plotted += 1
+
+    if lines_plotted == 0:
+        print(f"Warning: No valid data found in {filename}.")
+        
+    return lines_plotted
 
 def plot_average_trajectory_uniform(folder_path, ax):
     search_pattern = os.path.join(folder_path, 'traj_*.csv')
@@ -72,7 +86,7 @@ if __name__ == "__main__":
     
     # The integration_dt variable is removed since time is explicit in the new file format.
     
-    individual_count = plot_occupation_dynamics('../julia/occupation_dynamics.txt', ax)
+    individual_count = plot_occupation_dynamics('../rust/occupation_time.csv', ax, dt=1e-2)
     ensemble_count = plot_average_trajectory_uniform('../data/trajectoriesTN', ax)
     
     ax.set_title(f'Time Evolution of n (Averaging {ensemble_count} runs)')
