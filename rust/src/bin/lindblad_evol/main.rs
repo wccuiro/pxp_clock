@@ -1094,8 +1094,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ----------------------------------------------------------------
     // 2. PARAMETER SWEEP PREPARATION
     // ----------------------------------------------------------------
-    let gp_values = Array1::linspace(0.001, 0.2, 1);
-    let gm_values = Array1::linspace(0.001, 0.2, 1);
+    let gp_values = Array1::linspace(0.001, 0.2, 2);
+    let gm_values = Array1::linspace(0.001, 0.2, 2);
     let omega_values = Array1::linspace(1.0, 2.0, 1);
 
     // Flatten parameters into a single vector of pairs (g, omega)
