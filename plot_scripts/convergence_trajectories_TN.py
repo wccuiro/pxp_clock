@@ -20,11 +20,11 @@ Data Format Expectations:
 """
 
 # Global parameters for easy modification
-L = 10
+L = 12
 gamma_plus_vals = [0.001, 0.2]
 gamma_minus_vals = [0.001, 0.2]
 dt_trajectories = 0.1
-dt_exact = 0.01  # Time step for exact dynamics, should match the one used in the exact data generation
+dt_exact = 0.001  # Time step for exact dynamics, should match the one used in the exact data generation
 exact_file = '../rust/occupation_time.csv'
 
 def plot_exact_dynamics(filename, ax, target_gp, target_gm, var_name, dt_exact):

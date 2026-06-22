@@ -12,3 +12,5 @@
 julia/*.so
 
 /rust/target
+
+.vscode

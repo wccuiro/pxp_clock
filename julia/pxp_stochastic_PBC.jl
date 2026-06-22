@@ -1,17 +1,23 @@
 using ITensors
-using ITensorMPS   
+using ITensorMPS
 using Random
 using Printf
+using LinearAlgebra
+
+# FIX: Prevent OpenBLAS from oversubscribing cores. 
+# This stops Julia from trying to spawn hundreds of threads and locking up the CPU.
+BLAS.set_num_threads(1)
+ITensors.Strided.set_num_threads(1)
 
 function simulate_pxp_trajectories(;
   # --- 1. System Parameters ---
-  L = 10,
+  L = 12,
   Omega = 1.0,
-  gamma_plus  = 0.001,
-  gamma_minus = 0.2,
+  gamma_plus  = 0.2,
+  gamma_minus = 0.001,
   dt = 1e-1,
   total_time = 25.0,
-  num_trajectories = 50,
+  num_trajectories = 100,
   output_dir = "../data/trajectoriesTN"
   )
 
@@ -22,12 +28,16 @@ function simulate_pxp_trajectories(;
 
   println("--- PXP Tensor Network Simulation ---")
   println("Parameters: L=$L, Omega=$Omega, Gamma+=$gamma_plus, Gamma-=$gamma_minus, dt=$dt")
+  println("Starting simulation on ", Threads.nthreads(), " threads...")
 
   # Spin-1/2 mapping: "Up" = Occupied (1), "Dn" = Empty (0)
   s = siteinds("S=1/2", L)
 
-  # --- 2. Build Operators ---
-  # TEBD Gates (3-site blocks for PBC)
+  # ==========================================
+  # Pre-Compile Operators (Solves 200% compilation overhead)
+  # ==========================================
+  
+  # 1. TEBD Gates (3-site blocks for PBC)
   gates_1 = ITensor[]
   gates_2 = ITensor[]
   gates_3 = ITensor[]
@@ -36,16 +46,12 @@ function simulate_pxp_trajectories(;
     prev_i = i == 1 ? L : i - 1
     next_i = i == L ? 1 : i + 1
 
-    # Effective non-Hermitian Hamiltonian term for site i
-    # PXP term requires neighbors to be empty (ProjDn)
     h_term = (2.0 * Omega) * op("ProjDn", s[prev_i]) * op("Sx", s[i]) * op("ProjDn", s[next_i]) +
              (-0.5im * gamma_plus) * op("ProjDn", s[prev_i]) * op("ProjDn", s[i]) * op("ProjDn", s[next_i]) +
              (-0.5im * gamma_minus) * op("ProjDn", s[prev_i]) * op("ProjUp", s[i]) * op("ProjDn", s[next_i])
              
-    # Exponentiate the 3-site term for TEBD
     gate = exp(-1.0im * dt * h_term)
 
-    # Separate into 3 commuting groups
     if i % 3 == 1
       push!(gates_1, gate)
     elseif i % 3 == 2
@@ -55,51 +61,52 @@ function simulate_pxp_trajectories(;
     end
   end
 
-  # Jump rate MPOs for PBC: <psi|rate_MPOs[k]|psi> = <L_k^dag L_k>
+  # 2. Jump rate MPOs and Jump Operators
   rate_MPOs = MPO[]
   gammas    = Float64[]
+  jump_ops  = ITensor[] 
+
   for i in 1:L
     prev_i = i == 1 ? L : i - 1
     next_i = i == L ? 1 : i + 1
 
-    # L+^dag L+ = P_{prev} ProjDn_i P_{next}  (site empty, can be excited)
+    # L+ channel (empty->occupied: Dn->Up)
     os_plus = OpSum()
     os_plus += 1.0, "ProjDn", prev_i, "ProjDn", i, "ProjDn", next_i
     push!(rate_MPOs, MPO(os_plus, s))
     push!(gammas, gamma_plus)
+    push!(jump_ops, op("ProjDn", s[prev_i]) * op("S+", s[i]) * op("ProjDn", s[next_i]))
 
-    # L-^dag L- = P_{prev} ProjUp_i P_{next}  (site occupied, can decay)
+    # L- channel (occupied->empty: Up->Dn)
     os_minus = OpSum()
     os_minus += 1.0, "ProjDn", prev_i, "ProjUp", i, "ProjDn", next_i
     push!(rate_MPOs, MPO(os_minus, s))
     push!(gammas, gamma_minus)
+    push!(jump_ops, op("ProjDn", s[prev_i]) * op("S-", s[i]) * op("ProjDn", s[next_i]))
   end
 
-  # MPO for <n_{j-1} n_{j+1}> which is equivalent to distance-2 correlator <n_j n_{j+2}>
+  # 3. Next-Nearest Neighbor MPO
   os_nnn = OpSum()
   for j in 1:L
     j2 = j + 2 > L ? j + 2 - L : j + 2
-    # n is measured by ProjUp (Occupied)
     os_nnn += 1.0, "ProjUp", j, "ProjUp", j2
   end
   nnn_MPO = MPO(os_nnn, s)
 
-  # --- 3. Trajectory Loop ---
+  # ==========================================
+  # Trajectory Loop
+  # ==========================================
+  
+  # Thread-safe counter to monitor progress on the cluster
+  completed_trajectories = Threads.Atomic{Int}(0)
+
   Threads.@threads for traj_id in 0:(num_trajectories - 1)
-
     rng = MersenneTwister(traj_id)
+    thread_id = Threads.threadid()
 
-    # Superposition of Neel state and translated Neel state
-    # Neel state: alternating Occupied (Up) and Empty (Dn)
-    neel_1 = [isodd(i) ? "Up" : "Dn" for i in 1:L]
-    # neel_2 = [isodd(i) ? "Dn" : "Up" for i in 1:L]
-    psi1 = complex(MPS(s, neel_1))
-    # psi2 = complex(MPS(s, neel_2))
-    # psi = +(psi1, psi2; cutoff=1e-10)
-    psi = psi1
-    normalize!(psi)
-    
-    # Save a deepcopy of the initial state to compute fidelity
+    # Match Lindblad initial condition
+    neel = [isodd(i) ? "Up" : "Dn" for i in 1:L]
+    psi = complex(MPS(s, neel))
     psi_init = deepcopy(psi)
 
     times      = Float64[]
@@ -108,23 +115,22 @@ function simulate_pxp_trajectories(;
     nnn_vals   = Float64[]
     fid_vals   = Float64[]
 
-    current_time    = 0.0
-    p_accum         = 1.0
-    r_threshold     = rand(rng)
-    NO_JUMP = -1   
+    current_time = 0.0
+    p_accum      = 1.0
+    r_threshold  = rand(rng)
+    NO_JUMP      = -1   
 
-    # Record initial jump event & observables
+    # Initial Event Record
     push!(times, current_time)
-    push!(jump_types, 0)  # 0 = L+ (excitation), 1 = L- (decay)
-    
+    push!(jump_types, 0) 
     n_arr = real.(expect(psi, "ProjUp"))
     push!(n_vals, sum(n_arr) / L)
     push!(nnn_vals, real(inner(psi', nnn_MPO, psi)) / L)
-    push!(fid_vals, abs2(inner(psi_init, psi)))
+    push!(fid_vals, 1.0) # Fidelity with itself is 1
 
     for step in 1:steps
 
-      # --- Calculate Jump Probabilities ---
+      # Calculate Probabilities using the pre-compiled MPOs
       probs = zeros(Float64, 2 * L)
       for k in 1:(2 * L)
         probs[k] = real(inner(psi', rate_MPOs[k], psi)) * gammas[k] * dt
@@ -132,10 +138,9 @@ function simulate_pxp_trajectories(;
       probs_sum = sum(probs)
       p_accum *= max(0.0, 1.0 - probs_sum)
 
-      # --- Check for Jump ---
       if r_threshold >= p_accum
 
-        # Select jump channel proportional to its rate
+        # Select channel
         target     = probs_sum * rand(rng)
         cumulative = 0.0
         selected_k = 1
@@ -147,27 +152,16 @@ function simulate_pxp_trajectories(;
           end
         end
 
-        site_idx = ceil(Int, selected_k / 2)
-        prev_idx = site_idx == 1 ? L : site_idx - 1
-        next_idx = site_idx == L ? 1 : site_idx + 1
-
-        # Odd k  → L+ channel (empty→occupied: Dn→Up = "S+")
-        # Even k → L- channel (occupied→empty: Up→Dn = "S-")
-        op_str = (selected_k % 2 != 0) ? "S+" : "S-"
-
-        gate = op("ProjDn", s[prev_idx]) *
-               op(op_str,   s[site_idx]) *
-               op("ProjDn", s[next_idx])
-        psi = apply(gate, psi; cutoff=1e-10, maxdim=256)
+        # Apply exact pre-compiled jump operator
+        psi = apply(jump_ops[selected_k], psi; cutoff=1e-10, maxdim=256)
         normalize!(psi)
 
         p_accum     = 1.0
         r_threshold = rand(rng)
 
-        # Record jump event & observables
+        # Record Jump
         push!(times, current_time)
         push!(jump_types, (selected_k - 1) % 2)
-        
         n_arr = real.(expect(psi, "ProjUp"))
         push!(n_vals, sum(n_arr) / L)
         push!(nnn_vals, real(inner(psi', nnn_MPO, psi)) / L)
@@ -180,10 +174,9 @@ function simulate_pxp_trajectories(;
         psi = apply(gates_3, psi; cutoff=1e-8, maxdim=256)
         normalize!(psi) 
 
-        # Record no-jump event & observables
+        # Record No-Jump
         push!(times, current_time)
         push!(jump_types, NO_JUMP)
-        
         n_arr = real.(expect(psi, "ProjUp"))
         push!(n_vals, sum(n_arr) / L)
         push!(nnn_vals, real(inner(psi', nnn_MPO, psi)) / L)
@@ -203,6 +196,9 @@ function simulate_pxp_trajectories(;
                     times[i], jump_types[i], n_vals[i], nnn_vals[i], fid_vals[i])
         end
     end
+    
+    Threads.atomic_add!(completed_trajectories, 1)
+    println("Thread $thread_id finished trajectory $traj_id. Progress: $(completed_trajectories[]) / $num_trajectories")
   end
 end
 
