@@ -20,10 +20,10 @@ Data Format Expectations:
 """
 
 # Global parameters for easy modification
-L = 12
+L = 20
 gamma_plus_vals = [0.001, 0.2]
 gamma_minus_vals = [0.001, 0.2]
-dt_trajectories = 0.1
+dt_trajectories = 0.05
 dt_exact = 0.001  # Time step for exact dynamics, should match the one used in the exact data generation
 exact_file = '../rust/occupation_time.csv'
 
@@ -61,7 +61,7 @@ def plot_exact_dynamics(filename, ax, target_gp, target_gm, var_name, dt_exact):
                     values = [float(parts[i]) for i in range(3 + offset, len(parts), 3)]
                     time_axis = [i * dt_exact for i in range(len(values))]
                     
-                    ax.plot(time_axis, values, label=fr'Exact ($\omega$={omega})', 
+                    ax.plot(time_axis, values, label='Exact Lindblad', 
                             alpha=1, linewidth=2.0, linestyle='--')
                     lines_plotted += 1
     except FileNotFoundError:
