@@ -87,7 +87,7 @@ if __name__ == '__main__':
         DATA_FOLDER, 
         t_burn=T_TRANSIENT, 
         M_standard=10, 
-        M_rare=2 # Lowered threshold for the rare emission channel
+        M_rare=10 # Lowered threshold for the rare emission channel
     )
     
     if w_activity:

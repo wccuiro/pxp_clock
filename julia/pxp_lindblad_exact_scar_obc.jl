@@ -174,8 +174,8 @@ function build_obc_scar_vectorized(sites, v1, v2)
 end
 
 function main_obc()
-    L = 20
-    t_total = 20.0
+    L = 16
+    t_total = 50.0
     dt = 0.05
     steps = round(Int, t_total / dt)
     gamma_plus = 0.2
