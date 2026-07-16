@@ -93,7 +93,7 @@ if __name__ == '__main__':
     if w_activity:
         plt.figure(figsize=(10, 6))
         if w_emissions:
-            plt.hist(w_emissions, bins=30, alpha=0.5, label='(i) Accumulated Emissions (M=2)', density=True)
+            plt.hist(w_emissions, bins=30, alpha=0.5, label='(i) Accumulated Emissions (M=10)', density=True)
         plt.hist(w_activity, bins=30, alpha=0.5, label='(ii) Dynamical Activity (M=10)', density=True)
         if w_heat:
             plt.hist(w_heat, bins=30, alpha=0.5, label='(iii) Dissipated Heat Current (M=10)', density=True)
