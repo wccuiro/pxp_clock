@@ -1,0 +1,32 @@
+[package]
+name = "lindblad_solver"
+version = "0.2.0"
+edition = "2021"
+
+[features]
+# Threaded Intel MKL, statically linked (downloaded automatically if MKLROOT is not set).
+# NOTE: ndarray-linalg's own "intel-mkl-static" feature selects the SEQUENTIAL MKL
+# (mkl-static-lp64-seq), i.e. one core for every eigensolve. We therefore link MKL
+# ourselves through intel-mkl-src and leave ndarray-linalg without a backend feature.
+default = ["mkl-static"]
+mkl-static = ["mkl", "intel-mkl-src/mkl-static-lp64-iomp"]
+# Threaded MKL from the cluster installation (module load mkl; needs MKLROOT / LD_LIBRARY_PATH).
+mkl-dynamic = ["mkl", "intel-mkl-src/mkl-dynamic-lp64-iomp"]
+mkl = ["dep:intel-mkl-src"]
+# System reference LAPACK/BLAS (testing only):
+#   cargo build --release --no-default-features --features netlib
+netlib = ["ndarray-linalg/netlib-system"]
+
+[dependencies]
+ndarray = "0.15"
+ndarray-linalg = { version = "0.16", default-features = false }
+intel-mkl-src = { version = "0.8", default-features = false, optional = true }
+num-complex = "0.4"
+rayon = "1.10"
+faer = "0.22"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
