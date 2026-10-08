@@ -31,24 +31,28 @@ def plot_eigenvalue_overlaps(filename="decay.csv"):
                 
         for (gp, gm, omega), sector_list in grouped_data.items():
             fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
-            fig.suptitle(f"Eigenspectrum Overlaps: gp={gp}, gm={gm}, $\\Omega$={omega}", fontsize=14, fontweight='bold')
+            fig.suptitle(r"Eigenspectrum Overlaps: $\gamma_{{+}}$={gp}, $\gamma_{{-}}$={gm}".format(gp=gp, gm=gm), fontsize=14)
             
             sector_list.sort(key=lambda x: x['sector'])
             
             for s_data in sector_list:
                 sec_val = s_data['sector']
-                ax1.scatter(s_data['real'], s_data['overlap_mag'], alpha=0.7, edgecolors='w', linewidth=0.5, label=f"Sector {sec_val}")
-                ax2.scatter(s_data['imag'], s_data['overlap_mag'], alpha=0.7, edgecolors='w', linewidth=0.5, label=f"Sector {sec_val}")
+                ax1.scatter(s_data['real'], s_data['overlap_mag'], color='#E34234', alpha=0.7, edgecolors='w', linewidth=0.5)
+                ax2.scatter(s_data['imag'], s_data['overlap_mag'], color='#E34234', alpha=0.7, edgecolors='w', linewidth=0.5)
             
+            dE = 1.33
+            ax2.set_xticks([dE * n for n in range(-6, 7)])
+            ax2.set_xticklabels([r"$-6\Delta E$", r"$-5\Delta E$", r"$-4\Delta E$", r"$-3\Delta E$", r"$-2\Delta E$", r"$-\Delta E$", r"$0$", r"$\Delta E$", r"$2\Delta E$", r"$3\Delta E$", r"$4\Delta E$", r"$5\Delta E$", r"$6\Delta E$"], rotation=55)
+
             ax1.set_xlabel("Real(Eigenvalue)")
             ax1.set_ylabel("$|W_k|$ (Overlap Magnitude)")
             ax1.grid(True, alpha=0.3)
-            ax1.legend()
+            # ax1.legend()
             
             ax2.set_xlabel("Imaginary(Eigenvalue)")
             ax2.set_ylabel("$|W_k|$ (Overlap Magnitude)")
             ax2.grid(True, alpha=0.3)
-            ax2.legend()
+            # ax2.legend()
             
             plt.tight_layout()
             plt.show()
@@ -392,7 +396,7 @@ def plot_normalized_dynamics(filename="occupation_time.csv", dt=1e-4):
 
 
 if __name__ == "__main__":
-    # plot_eigenvalue_overlaps("../rust/decay_12.csv")
+    plot_eigenvalue_overlaps("../rust/decay.csv")
     # plot_scar_decomposition("../rust/decay_12.csv", t_max=10.0, dt=1e-3)
     # plot_fidelity_comparison("../rust/decay_12.csv", "../rust/occupation_time.csv", dt=1e-3)
     plot_normalized_dynamics("../rust/occupation_time.csv", dt=1e-3)

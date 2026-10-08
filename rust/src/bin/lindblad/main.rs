@@ -994,7 +994,7 @@ fn is_diagonalizable(matrix: &Array2<Complex64>) -> bool {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let l = 8;
+    let l = 14;
     let _q_sector = 0;
     
     let basis = translationally_invariant_basis(l);
@@ -1012,8 +1012,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     
-    let gp_values = Array1::linspace(0.001, 0.2, 2);
-    let gm_values = Array1::linspace(0.001, 0.2, 2);
+    let gp_values = Array1::linspace(0.2, 0.2, 1);
+    let gm_values = Array1::linspace(0.001, 0.2, 1);
     let omega_values = Array1::linspace(1.0, 2.0, 1);
 
     // let raw_space = Array1::linspace(0.5, 1.0, 3);
@@ -1091,7 +1091,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 1. RUN PARALLEL SIMULATIONS
     let results: Vec<SimulationResult> = parameters
-        .par_iter()
+        .iter()
         .map(|&(gp, gm, omega)| {
             let mut res = SimulationResult {
                 occupation_str: String::new(),
@@ -1119,11 +1119,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 };
 
                 // Check Diagonalizability
-                if is_diagonalizable(&l_cal_dense) {
-                    println!("Diagonalizability: The matrix sector {}, omega {}, gamma - {}, gamma + {} IS diagonalizable.", q_sector, omega, gm, gp);
-                } else {
-                    println!("Diagonalizability: The matrix sector {}, omega {}, gamma - {}, gamma + {} is NOT diagonalizable.", q_sector, omega, gm, gp);
-                }
+                // if is_diagonalizable(&l_cal_dense) {
+                //     println!("Diagonalizability: The matrix sector {}, omega {}, gamma - {}, gamma + {} IS diagonalizable.", q_sector, omega, gm, gp);
+                // } else {
+                //     println!("Diagonalizability: The matrix sector {}, omega {}, gamma - {}, gamma + {} is NOT diagonalizable.", q_sector, omega, gm, gp);
+                // }
 
                 if let Ok((evals, evecs)) = l_cal_dense.eig() {
 

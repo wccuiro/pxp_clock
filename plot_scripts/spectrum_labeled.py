@@ -22,8 +22,8 @@ with open(filename, 'r') as f:
         if len(parts) < 4: continue
         q_sector, gp, gm, omega = parts[0:4]
         
-        # Only process Q=0 and Q=pi (4) sectors
-        if q_sector not in ['0', '4']: continue
+        # Only process Q=0 and Q=pi (5) sectors
+        if q_sector not in ['0', '5']: continue
         
         param_key = (gp, gm, omega)
         if param_key not in data_by_param:
