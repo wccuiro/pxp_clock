@@ -3,6 +3,23 @@ import numpy as np
 import plotly.graph_objects as go
 from dash import Dash, dcc, html, Input, Output
 
+
+"""
+This script creates an interactive Dash application to visualize the spectrum of a Lindbladian as a function of two parameters: g (g) where g is gamma+/gamma-
+and omega (Omega). All this parameters of the model
+
+H = Omega sum P X P
+
+and dissipators L = sqrt(gamma+) P sigma+ P, L = sqrt(gamma-) P sigma- P
+
+The eigenvalues are loaded from a CSV file, and the user can select different values of g and ω using sliders to see how the spectrum changes. The plot is created using Plotly for efficient rendering, especially when dealing with a large number of eigenvalues.
+
+The CSV file is expected to have the following format:
+g, omega, Re(λ1), Im(λ1), Re(λ2), Im(λ2), ..., Re(λN), Im(λN)
+where each row corresponds to a specific combination of gamma and omega, followed by the real and imaginary parts of the eigenvalues of the Lindbladian for that combination. The first two columns are used for the sliders, and the rest are used for plotting the spectrum.
+"""
+
+
 # Load data efficiently
 print("Loading data...")
 df = pd.read_csv('../rust/eigenvalues_10.csv', header=None)

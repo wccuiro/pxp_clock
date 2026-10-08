@@ -220,7 +220,7 @@ function main()
         worker_id = myid() # Identify which core is running this job
         println("[Worker $worker_id] Starting: gp=$(p.gp), gm=$(p.gm)")
 
-        output_file = "data_N$(p.N)_W$(p.Omega)_gp$(p.gp)_gm$(p.gm).txt"
+        output_file = "data_N$(p.N)_dt$(p.dt)_gp$(p.gp)_gm$(p.gm).txt"
 
         # Initialize isolated sites and states on this specific worker
         sites = siteinds("S=1/2", 2 * p.N)

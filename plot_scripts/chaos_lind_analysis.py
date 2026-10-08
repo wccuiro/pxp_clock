@@ -2,19 +2,14 @@ import numpy as np
 import pandas as pd
 from scipy.spatial import KDTree
 
-def classify_1d_dynamics(r_avg):
-    """Classify 1D real spectra against Poisson and GOE benchmarks."""
-    integrable = 0.386
-    chaotic = 0.530
-    
-    dist_to_integrable = abs(r_avg - integrable)
-    dist_to_chaotic = abs(r_avg - chaotic)
-    
-    if dist_to_integrable < dist_to_chaotic:
-        return "Integrable (1D Poisson)"
-    else:
-        return "Chaotic (1D GOE)"
 
+"""
+This script processes the eigenvalues of a Lindbladian to classify the dynamics as either integrable or chaotic printing them in the console. 
+
+The data has to be in the following format:
+g, omega, Re(λ1), Im(λ1), Re(λ2), Im(λ2), ..., Re(λN), Im(λN)
+where each row corresponds to a specific combination of gamma and omega, followed by the real and imaginary parts of the eigenvalues of the Lindbladian for that combination. 
+"""
 def classify_2d_dynamics(r_avg, cos_theta_avg):
     """Classify 2D complex spectra against Poisson and Ginibre benchmarks."""
     integrable = np.array([0.667, 0.0])
