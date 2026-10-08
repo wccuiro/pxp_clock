@@ -1,5 +1,5 @@
 *.png
-*.toml
+# *.toml
 *.npz
 /data
 *.dat
