@@ -3,8 +3,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 # 1. Load the 12-site data
-df_decay = pd.read_csv('../rust/decay_12.csv', header=None)
-df_oee = pd.read_csv('../rust/oee_12.csv', header=None)
+df_decay = pd.read_csv('../rust/decay_14_new.csv', header=None)
+df_oee = pd.read_csv('../rust/oee_14_new.csv', header=None)
 
 # 2. Parse decay_12 into a long format
 decay_rows = []

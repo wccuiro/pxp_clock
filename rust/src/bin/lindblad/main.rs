@@ -948,19 +948,21 @@ struct Outputs {
 }
 
 impl Outputs {
-    fn create() -> std::io::Result<Self> {
-        let f = |name: &str| File::create(name).map(BufWriter::new);
-        let mut occupation = if COMPUTE_STEADY_STATE { Some(f("occupation.csv")?) } else { None };
+    fn create(l: usize, p: &Params) -> std::io::Result<Self> {
+        let suffix = format!("_L{}_gp{}_gm{}_omega{}", l, p.gp, p.gm, p.omega);
+        let f = |name: &str| File::create(format!("{name}{suffix}.csv")).map(BufWriter::new);
+        
+        let mut occupation = if COMPUTE_STEADY_STATE { Some(f("occupation")?) } else { None };
         if let Some(o) = occupation.as_mut() {
             writeln!(o, "q_sector,gp,gm,omega,n,nn")?;
         }
         Ok(Outputs {
-            eigenvalues: f("eigenvalues.csv")?,
-            decay: f("decay.csv")?,
-            oee: if COMPUTE_OEE { Some(f("oee.csv")?) } else { None },
-            std_eigenvalues: if COMPUTE_STEADY_STATE { Some(f("std_eigenvalues.csv")?) } else { None },
+            eigenvalues: f("eigenvalues")?,
+            decay: f("decay")?,
+            oee: if COMPUTE_OEE { Some(f("oee")?) } else { None },
+            std_eigenvalues: if COMPUTE_STEADY_STATE { Some(f("std_eigenvalues")?) } else { None },
             occupation,
-            cond: if COMPUTE_CONDITION_NUMBERS { Some(f("cond.csv")?) } else { None },
+            cond: if COMPUTE_CONDITION_NUMBERS { Some(f("cond")?) } else { None },
         })
     }
 }
@@ -1140,7 +1142,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let oee = OeeContext::new(&ch);
     eprintln!("L = {l}: {} constrained configurations, {} orbits", ch.configs.len(), ch.reps.len());
 
-    let mut out = Outputs::create()?;
+    let mut out = Outputs::create(l, &cfg.params[0])?;
     for q in [0, l / 2] {
         let sec = Sector::new(&ch, q);
         let blocks = [Block::new(&ch, &sec, 1), Block::new(&ch, &sec, -1)];

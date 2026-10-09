@@ -396,7 +396,7 @@ def plot_normalized_dynamics(filename="occupation_time.csv", dt=1e-4):
 
 
 if __name__ == "__main__":
-    plot_eigenvalue_overlaps("../rust/decay.csv")
-    # plot_scar_decomposition("../rust/decay_12.csv", t_max=10.0, dt=1e-3)
+    plot_eigenvalue_overlaps("../rust/decay_14_new.csv")
+    # plot_scar_decomposition("../rust/decay_14_new.csv", t_max=10.0, dt=1e-3)
     # plot_fidelity_comparison("../rust/decay_12.csv", "../rust/occupation_time.csv", dt=1e-3)
-    plot_normalized_dynamics("../rust/occupation_time.csv", dt=1e-3)
+    # plot_normalized_dynamics("../rust/occupation_time.csv", dt=1e-3)

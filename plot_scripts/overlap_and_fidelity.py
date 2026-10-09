@@ -128,5 +128,5 @@ def plot_fidelity_in_time(filename="occupation_time_10.csv", dt=1e-3):
 
 
 if __name__ == "__main__":
-    plot_overlap_vs_imaginary("../rust/decay.csv")
-    plot_fidelity_in_time("../rust/occupation_time_w_fid.csv", dt=2e-4)
+    plot_overlap_vs_imaginary("../rust/decay_14_new.csv")
+    # plot_fidelity_in_time("../rust/occupation_time_w_fid.csv", dt=2e-4)

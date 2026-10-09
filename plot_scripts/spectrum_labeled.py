@@ -22,8 +22,8 @@ with open(filename, 'r') as f:
         if len(parts) < 4: continue
         q_sector, gp, gm, omega = parts[0:4]
         
-        # Only process Q=0 and Q=pi (5) sectors
-        if q_sector not in ['0', '5']: continue
+        # Only process Q=0 and Q=pi (7) sectors
+        if q_sector not in ['0', '7']: continue
         
         param_key = (gp, gm, omega)
         if param_key not in data_by_param:
@@ -63,7 +63,7 @@ for (gp, gm, omega), pdata in data_by_param.items():
     
     non_ss_indices = np.where(mask)[0]
     sorted_non_ss = non_ss_indices[np.argsort(weights_mag[mask])]
-    top_8_idx = sorted_non_ss[-8:]
+    top_8_idx = sorted_non_ss[-14:]
     
     # --- SMART GROUPING LOGIC FOR LABELS ---
     groups = {}

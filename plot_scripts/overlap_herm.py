@@ -61,7 +61,7 @@ def parse_original_data(filepath):
     return df
 
 # 1. Parse the original file
-df = parse_original_data('../rust/decay.csv')
+df = parse_original_data('../rust/decay_14_new.csv')
 
 # 2. Find unique parameter sets
 unique_params = df[['gp', 'gm', 'omega']].drop_duplicates()
