@@ -1,12 +1,14 @@
 """
 Reference time evolution of the Neel state under the PXP Lindbladian (independent of the Rust code).
 
-    python3 tools/reference_evolution.py L T dt gp gm omega out.npy [alpha]
+    python3 tools/reference_evolution.py L T dt gp gm omega out.npy [alpha] [plus=0|1]
 
 With alpha it is the partial projection model of src/bin/lindblad_alpha (full 2^L basis,
-see pxp_reference.py); without it the constrained model.
+see pxp_reference.py); without it the constrained model. With plus=0 or plus=1 it is the staggered
+model of src/bin/lindblad_staggered (sigma^+ only on the sites j = plus mod 2, sigma^- on the others).
 
-rho(t) is propagated in the translation sectors Q = 0 and Q = L/2 with the dense matrix
+rho(t) is propagated in the translation sectors Q = 0 and Q = L/2 (staggered: the sector Q = 0 of
+the translation by two sites) with the dense matrix
 exponential P = expm(dt L_Q) (scipy.linalg.expm, Pade + scaling and squaring), rho(t+dt) = P rho(t).
 No Euler steps and no trace renormalization.
 
@@ -26,8 +28,9 @@ from scipy.linalg import expm
 import pxp_reference as ref
 
 def main():
+  plus_site, step = ref.plus_site_argument(sys.argv)
   if len(sys.argv) not in (8, 9):
-    sys.exit("usage: reference_evolution.py L T dt gp gm omega out.npy [alpha]")
+    sys.exit("usage: reference_evolution.py L T dt gp gm omega out.npy [alpha] [plus=0|1]")
   L = int(sys.argv[1])
   T, dt, gamma_plus, gamma_minus, omega = (float(x) for x in sys.argv[2:7])
   out_file = sys.argv[7]
@@ -37,9 +40,11 @@ def main():
   times = np.arange(steps + 1) * dt
 
   t0 = time.time()
-  states, index, Lind = ref.build_model(L, gamma_plus, gamma_minus, omega, alpha)
+  states, index, Lind = ref.build_model(L, gamma_plus, gamma_minus, omega, alpha, plus_site)
   f = ref.trace_vectors(L, states, index)
   model = "constrained" if alpha is None else f"alpha = {alpha}"
+  if plus_site is not None:
+    model += f", staggered (sigma+ on sites j = {plus_site} mod 2)"
   print(f"L = {L}, {model}: {len(states)} configurations, {steps} steps of dt = {dt}  (built in {time.time()-t0:.1f}s)")
 
   names = ('n', 'nn', 'rho0')
@@ -47,9 +52,9 @@ def main():
   obs_eig = np.zeros((steps + 1, 3))
   trace = np.zeros(steps + 1)
 
-  for Q in ref.sectors(L):
+  for Q in ref.sectors(L, step):
     t0 = time.time()
-    B = ref.sector_basis(L, states, index, Q)
+    B = ref.sector_basis(L, states, index, Q, step)
     L_Q, residual = ref.reduce_to_sector(Lind, B)
     f_Q = {name: B.T @ vec for name, vec in f.items()}
 

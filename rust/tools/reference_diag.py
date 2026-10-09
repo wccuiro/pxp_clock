@@ -1,12 +1,13 @@
 """
 Reference diagonalization of the PXP Lindbladian (independent of the Rust code).
 
-    python3 tools/reference_diag.py L gp gm omega out.json [alpha]
+    python3 tools/reference_diag.py L gp gm omega out.json [alpha] [plus=0|1]
 
 With alpha it is the partial projection model of src/bin/lindblad_alpha (full 2^L basis,
-see pxp_reference.py); without it the constrained model.
+see pxp_reference.py); without it the constrained model. With plus=0 or plus=1 it is the staggered
+model of src/bin/lindblad_staggered (sigma^+ only on the sites j = plus mod 2, sigma^- on the others).
 
-For the sectors Q = 0 and Q = L/2 it writes, per eigenmode k of the dense sector matrix:
+For the sectors Q = 0 and Q = L/2 (staggered: the sector Q = 0 of the translation by two sites) it writes, per eigenmode k of the dense sector matrix:
   lambda_k
   c_k   Neel expansion coefficient on the unit-norm right eigenvector r_k  (rho0 = sum_k c_k r_k)
   o_k   Tr(r_k^dag rho0)
@@ -70,26 +71,30 @@ def operator_entanglement(r, rows, cols, d_A, d_B):
 #############################################################################
 
 def main():
+  plus_site, step = ref.plus_site_argument(sys.argv)
   if len(sys.argv) not in (6, 7):
-    sys.exit("usage: reference_diag.py L gp gm omega out.json [alpha]")
+    sys.exit("usage: reference_diag.py L gp gm omega out.json [alpha] [plus=0|1]")
   L = int(sys.argv[1])
   gamma_plus, gamma_minus, omega = (float(x) for x in sys.argv[2:5])
   out_file = sys.argv[5]
   alpha = float(sys.argv[6]) if len(sys.argv) == 7 else None
 
   t0 = time.time()
-  states, index, Lind = ref.build_model(L, gamma_plus, gamma_minus, omega, alpha)
+  states, index, Lind = ref.build_model(L, gamma_plus, gamma_minus, omega, alpha, plus_site)
   N = len(states)
   f = ref.trace_vectors(L, states, index)
   rows, cols, d_A, d_B = schmidt_indices(L, states, constrained=(alpha is None))
   model = "constrained" if alpha is None else f"alpha = {alpha}"
+  if plus_site is not None:
+    model += f", staggered (sigma+ on sites j = {plus_site} mod 2)"
   print(f"L = {L}, {model}: {N} configurations, operator space {N*N}  (built in {time.time()-t0:.1f}s)")
 
-  result = {"L": L, "gp": gamma_plus, "gm": gamma_minus, "omega": omega, "alpha": alpha, "sectors": {}, "steady": None}
+  result = {"L": L, "gp": gamma_plus, "gm": gamma_minus, "omega": omega, "alpha": alpha, "plus_site": plus_site,
+            "sectors": {}, "steady": None}
 
-  for Q in ref.sectors(L):
+  for Q in ref.sectors(L, step):
     t0 = time.time()
-    B = ref.sector_basis(L, states, index, Q)
+    B = ref.sector_basis(L, states, index, Q, step)
     L_Q, residual = ref.reduce_to_sector(Lind, B)
     f_Q = {name: B.T @ vec for name, vec in f.items()}
 

@@ -5,8 +5,9 @@ Compare the output of the Rust diagonalization with a reference written by refer
 
 run_dir holds eigenvalues*.csv, decay*.csv and (optional) oee*.csv, occupation*.csv,
 std_eigenvalues*.csv, either with the plain names or with a suffix (_L.._gp.._gm.._omega..,
-_alpha). The rows with the q, gp, gm, omega of the reference are used; for a partial
-projection reference (alpha) the rows must start with q, gp, gm, omega, alpha.
+_alpha, _staggered). The rows with the q, gp, gm, omega of the reference are used; for a partial
+projection reference (alpha) the rows must start with q, gp, gm, omega, alpha. A staggered
+reference (plus=0|1) has the single sector q = 0; run the Rust code with the same plus_site.
 Files without such a row are reported as not available.
 
 Eigenvalues are matched by assignment (Hungarian), never by sorting. c_k and o_k carry the
@@ -122,7 +123,8 @@ def main():
   suffix = find_run(run_dir, ref)
   path = lambda name: os.path.join(run_dir, name + suffix)
   print(f"reference: L={ref['L']} gp={params[0]} gm={params[1]} omega={params[2]}"
-        + (f" alpha={params[3]}" if len(params) == 4 else ""))
+        + (f" alpha={params[3]}" if len(params) == 4 else "")
+        + (f" staggered, sigma+ on sites j = {ref['plus_site']} mod 2" if ref.get("plus_site") is not None else ""))
   print(f"run:       {path('eigenvalues')}")
 
   worst = {}

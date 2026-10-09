@@ -19,9 +19,16 @@
 // so adjacent excitations are created for α < 1 and the full 2^L basis is needed.
 // The jumps stay real with CAC = -A, so the same four symmetries and blocks hold.
 //
+// Staggered model, `Chain::with_step(l, true, 2)` and `Model::staggered(&ch, plus_site)`:
+// σ^+ jumps only on the sites j ≡ plus_site (mod 2), σ^- jumps only on the other sublattice.
+// The translation by one site and the bond-centred reflections are lost; the translation by
+// two sites, R (site-centred), S and Hermiticity remain. Everything below is then written for
+// the translation unit U = T^step with nt = L/step translations (step = 1: U = T, nt = L).
+// The Néel state is invariant under T², so it lives in the sector Q = 0 only.
+//
 // Conventions:
-//   |r,k> = (1/√p) Σ_{d<p} e^{-i2πkd/L} T^d |r>,  T = cyclic shift left by one bit,
-//   p = period of the representative r, k allowed iff k·p ≡ 0 (mod L).
+//   |r,k> = (1/√p) Σ_{d<p} e^{-i2πkd/nt} U^d |r>,  U = T^step, T = cyclic shift left by one bit,
+//   p = period of the representative r under U, k = 0..nt-1 allowed iff k·p ≡ 0 (mod nt).
 
 use num_complex::Complex64 as C64;
 use rayon::prelude::*;
@@ -52,13 +59,16 @@ const NONE: u32 = u32::MAX;
 
 struct Chain {
     l: usize,
+    /// Translation unit U = T^step and number of translations nt = l / step.
+    step: usize,
+    nt: usize,
     mask: u64,
     /// All PBC-constrained (Lucas) configurations, or all 2^L if not `constrained`, ascending.
     configs: Vec<u64>,
     /// config -> index in `configs` (NONE if not allowed). Size 2^L.
     #[allow(dead_code)]
     conf_index: Vec<u32>,
-    /// config -> representative index and shift: config = T^shift rep. Size 2^L.
+    /// config -> representative index and shift: config = U^shift rep. Size 2^L.
     conf_rep: Vec<u32>,
     conf_shift: Vec<u8>,
     /// Orbit representatives (smallest member), their periods and orbits (as config indices).
@@ -71,16 +81,25 @@ struct Chain {
     pos: Vec<Vec<u32>>,
     /// Offsets of the single-copy momentum basis (index of |r,k> = ms_off[k] + pos[k][r]).
     ms_off: Vec<usize>,
-    /// Reflection j -> -j mod L:  R|rep> = T^{refl_shift} |refl_rep>.
+    /// Reflection j -> -j mod L:  R|rep> = U^{refl_shift} |refl_rep>.
     refl_rep: Vec<u32>,
     refl_shift: Vec<u8>,
-    /// e^{i 2π j / L}
+    /// e^{i 2π j / nt}
     phases: Vec<C64>,
 }
 
 impl Chain {
+    #[allow(dead_code)]
     fn new(l: usize, constrained: bool) -> Self {
+        Chain::with_step(l, constrained, 1)
+    }
+
+    /// Orbits and momenta of the translation by `step` sites (step = 2 for the staggered model).
+    #[allow(dead_code)]
+    fn with_step(l: usize, constrained: bool, step: usize) -> Self {
         assert!(l >= 4 && l % 2 == 0 && l <= 28, "L must be even, 4 <= L <= 28");
+        assert!(step >= 1 && l % step == 0, "the translation unit must divide L");
+        let nt = l / step;
         let mask = (1u64 << l) - 1;
         let rot = |s: u64, d: usize| -> u64 {
             let d = d % l;
@@ -99,36 +118,36 @@ impl Chain {
         let reps: Vec<u64> = configs
             .iter()
             .copied()
-            .filter(|&s| (1..l).all(|d| rot(s, d) >= s))
+            .filter(|&s| (1..nt).all(|d| rot(s, step * d) >= s))
             .collect();
         let mut conf_rep = vec![NONE; nconf];
         let mut conf_shift = vec![0u8; nconf];
         let mut period = Vec::with_capacity(reps.len());
         let mut orbit = Vec::with_capacity(reps.len());
         for (ri, &r) in reps.iter().enumerate() {
-            let p = (1..=l).find(|&d| rot(r, d) == r).unwrap();
+            let p = (1..=nt).find(|&d| rot(r, step * d) == r).unwrap();
             period.push(p);
             let mut orb = Vec::with_capacity(p);
             for d in 0..p {
-                let c = rot(r, d) as usize;
+                let c = rot(r, step * d) as usize;
                 conf_rep[c] = ri as u32;
                 conf_shift[c] = d as u8;
                 orb.push(conf_index[c]);
             }
             orbit.push(orb);
         }
-        let mut mom = vec![Vec::new(); l];
-        let mut pos = vec![vec![NONE; reps.len()]; l];
-        for k in 0..l {
+        let mut mom = vec![Vec::new(); nt];
+        let mut pos = vec![vec![NONE; reps.len()]; nt];
+        for k in 0..nt {
             for ri in 0..reps.len() {
-                if (k * period[ri]) % l == 0 {
+                if (k * period[ri]) % nt == 0 {
                     pos[k][ri] = mom[k].len() as u32;
                     mom[k].push(ri as u32);
                 }
             }
         }
-        let mut ms_off = vec![0usize; l + 1];
-        for k in 0..l {
+        let mut ms_off = vec![0usize; nt + 1];
+        for k in 0..nt {
             ms_off[k + 1] = ms_off[k] + mom[k].len();
         }
         let reflect = |s: u64| -> u64 {
@@ -143,11 +162,11 @@ impl Chain {
             refl_rep.push(conf_rep[c]);
             refl_shift.push(conf_shift[c]);
         }
-        let phases = (0..l)
-            .map(|j| C64::from_polar(1.0, 2.0 * PI * j as f64 / l as f64))
+        let phases = (0..nt)
+            .map(|j| C64::from_polar(1.0, 2.0 * PI * j as f64 / nt as f64))
             .collect();
         Chain {
-            l, mask, configs, conf_index, conf_rep, conf_shift, reps, period, orbit, mom, pos,
+            l, step, nt, mask, configs, conf_index, conf_rep, conf_shift, reps, period, orbit, mom, pos,
             ms_off, refl_rep, refl_shift, phases,
         }
     }
@@ -158,10 +177,10 @@ impl Chain {
         if d == 0 { s } else { ((s << d) | (s >> (self.l - d))) & self.mask }
     }
 
-    /// e^{i 2π x / L}
+    /// e^{i 2π x / nt}
     #[inline]
     fn ph(&self, x: i64) -> C64 {
-        self.phases[x.rem_euclid(self.l as i64) as usize]
+        self.phases[x.rem_euclid(self.nt as i64) as usize]
     }
 
     #[inline]
@@ -170,7 +189,7 @@ impl Chain {
     }
 
     fn n_ms(&self) -> usize {
-        self.ms_off[self.l]
+        self.ms_off[self.nt]
     }
 }
 
@@ -178,34 +197,34 @@ impl Chain {
 // Single-copy operators in the momentum basis
 // ============================================================================
 
-/// table[ms][k'] = list of (rep', <rep',k'| O_0 |ms>) for a site-0 operator O_0
+/// table[ms][k'] = list of (rep', <rep',k'| O |ms>) for a single-site operator O
 /// that maps a configuration to a configuration times a real weight.
 type OpTable = Vec<Vec<Vec<(u32, C64)>>>;
 
 fn site_op_table(ch: &Chain, f: impl Fn(u64) -> Option<(u64, f64)>) -> OpTable {
-    let l = ch.l;
+    let nt = ch.nt;
     let mut table = Vec::with_capacity(ch.n_ms());
-    for k in 0..l {
+    for k in 0..nt {
         for &ri in &ch.mom[k] {
             let r = ri as usize;
             let p = ch.period[r];
             let mut acc: HashMap<(usize, u32), C64> = HashMap::new();
             for d in 0..p {
-                let c = ch.rot(ch.reps[r], d);
+                let c = ch.rot(ch.reps[r], ch.step * d);
                 if let Some((c2, wgt)) = f(c) {
                     let r2 = ch.conf_rep[c2 as usize];
                     assert!(r2 != NONE, "operator left the configuration space");
                     let e = ch.conf_shift[c2 as usize] as i64;
                     let p2 = ch.period[r2 as usize];
                     let amp = ch.ph(-(k as i64) * d as i64) * wgt / ((p * p2) as f64).sqrt();
-                    for k2 in 0..l {
-                        if (k2 * p2) % l == 0 {
+                    for k2 in 0..nt {
+                        if (k2 * p2) % nt == 0 {
                             *acc.entry((k2, r2)).or_insert(ZERO) += amp * ch.ph(k2 as i64 * e);
                         }
                     }
                 }
             }
-            let mut by_k = vec![Vec::new(); l];
+            let mut by_k = vec![Vec::new(); nt];
             for ((k2, r2), v) in acc {
                 if v.norm() > 1e-13 {
                     by_k[k2].push((r2, v));
@@ -223,19 +242,37 @@ fn site_op_table(ch: &Chain, f: impl Fn(u64) -> Option<(u64, f64)>) -> OpTable {
 struct Model {
     /// h[ms] = (rep', <rep',k|H|ms>) with H = Σ_j PXP_j (same k only).
     h: Vec<Vec<(u32, C64)>>,
-    /// Site-0 jump operators A^+_0, A^-_0 in the momentum basis.
-    a_plus: OpTable,
-    a_minus: OpTable,
+    /// Jump operators A^+_i, A^-_i in the momentum basis, one table per site i of the unit cell
+    /// that carries the jump (uniform model: site 0; staggered: one sublattice each).
+    a_plus: Vec<OpTable>,
+    a_minus: Vec<OpTable>,
     /// Σ_j A^±_j† A^±_j is diagonal: eigenvalue per representative.
     kappa_plus: Vec<f64>,
     kappa_minus: Vec<f64>,
 }
 
 impl Model {
+    /// σ^+ and σ^- jumps on every site.
     /// alpha = None: strict projectors P = |0><0| in the jumps; Some(α): soft projectors
     /// P^α = [(1+α)|0><0| + (1-α)|1><1|] / (1+|α|). The Hamiltonian always keeps the strict blockade.
+    #[allow(dead_code)]
     fn new(ch: &Chain, alpha: Option<f64>) -> Self {
+        let cell: Vec<usize> = (0..ch.step).collect();
+        Model::build(ch, alpha, &cell, &cell)
+    }
+
+    /// Staggered jumps with strict projectors: σ^+ only on the sites j ≡ plus_site (mod 2),
+    /// σ^- only on the other sublattice. The Néel state occupies the sublattice 0.
+    #[allow(dead_code)]
+    fn staggered(ch: &Chain, plus_site: usize) -> Self {
+        assert!(ch.step == 2 && plus_site < 2, "the staggered model needs Chain::with_step(l, _, 2)");
+        Model::build(ch, None, &[plus_site], &[1 - plus_site])
+    }
+
+    /// `plus_sites` / `minus_sites`: sites of the unit cell 0..step that carry σ^+ / σ^- jumps.
+    fn build(ch: &Chain, alpha: Option<f64>, plus_sites: &[usize], minus_sites: &[usize]) -> Self {
         let l = ch.l;
+        let nt = ch.nt;
         let soft = |c: u64, j: usize| -> f64 {
             let occ = (c >> (j % l)) & 1 == 1;
             match alpha {
@@ -244,19 +281,33 @@ impl Model {
             }
         };
         let wgt = |c: u64, j: usize| soft(c, j + l - 1) * soft(c, j + 1);
-        let nb_empty = |c: u64| (c >> 1) & 1 == 0 && (c >> (l - 1)) & 1 == 0;
-        let h_tab = site_op_table(ch, |c| if nb_empty(c) { Some((c ^ 1, 1.0)) } else { None });
-        let a_plus = site_op_table(ch, |c| if wgt(c, 0) != 0.0 && c & 1 == 0 { Some((c | 1, wgt(c, 0))) } else { None });
-        let a_minus = site_op_table(ch, |c| if wgt(c, 0) != 0.0 && c & 1 == 1 { Some((c & !1, wgt(c, 0))) } else { None });
-        // H = Σ_j T^j h_0 T^-j  =>  <r',k|H|r,k> = L <r',k|h_0|r,k>
+        let bit = |c: u64, j: usize| (c >> (j % l)) & 1;
+        let nb_empty = |c: u64, i: usize| bit(c, i + 1) == 0 && bit(c, i + l - 1) == 0;
+        let jump = |i: usize, target: u64| {
+            site_op_table(ch, |c| if wgt(c, i) != 0.0 && bit(c, i) != target { Some((c ^ (1u64 << i), wgt(c, i))) } else { None })
+        };
+        let a_plus = plus_sites.iter().map(|&i| jump(i, 1)).collect();
+        let a_minus = minus_sites.iter().map(|&i| jump(i, 0)).collect();
+        // H = Σ_u U^u (Σ_{i<step} h_i) U^-u  =>  <r',k|H|r,k> = nt Σ_i <r',k|h_i|r,k>
+        let h_tabs: Vec<OpTable> = (0..ch.step)
+            .map(|i| site_op_table(ch, |c| if nb_empty(c, i) { Some((c ^ (1u64 << i), 1.0)) } else { None }))
+            .collect();
         let mut h = Vec::with_capacity(ch.n_ms());
-        for k in 0..l {
+        for k in 0..nt {
             for &ri in &ch.mom[k] {
                 let ms = ch.ms(k, ri as usize);
-                h.push(h_tab[ms][k].iter().map(|&(r, v)| (r, v * l as f64)).collect());
+                let mut row: Vec<(u32, C64)> = Vec::new();
+                for tab in &h_tabs {
+                    for &(r, v) in &tab[ms][k] {
+                        match row.iter_mut().find(|x| x.0 == r) {
+                            Some(x) => x.1 += v * nt as f64,
+                            None => row.push((r, v * nt as f64)),
+                        }
+                    }
+                }
+                h.push(row);
             }
         }
-        let bit = |c: u64, j: usize| (c >> (j % l)) & 1;
         let mut kappa_plus = Vec::new();
         let mut kappa_minus = Vec::new();
         for &r in &ch.reps {
@@ -264,7 +315,11 @@ impl Model {
             let mut km = 0.0;
             for j in 0..l {
                 let w2 = wgt(r, j) * wgt(r, j);
-                if bit(r, j) == 0 { kp += w2; } else { km += w2; }
+                if bit(r, j) == 0 {
+                    if plus_sites.contains(&(j % ch.step)) { kp += w2; }
+                } else if minus_sites.contains(&(j % ch.step)) {
+                    km += w2;
+                }
             }
             kappa_plus.push(kp);
             kappa_minus.push(km);
@@ -276,11 +331,11 @@ impl Model {
     /// nonzero output component (sector index, value) through `out` (duplicates possible).
     #[inline]
     fn apply<F: FnMut(usize, C64)>(&self, ch: &Chain, sec: &Sector, s: usize, p: &Params, out: &mut F) {
-        let l = ch.l;
+        let nt = ch.nt;
         let q = sec.q;
         let (k, n, m) = sec.elems[s];
         let (k, n, m) = (k as usize, n as usize, m as usize);
-        let kb = (k + l - q) % l;
+        let kb = (k + nt - q) % nt;
         let msa = ch.ms(k, n);
         let msb = ch.ms(kb, m);
 
@@ -297,27 +352,29 @@ impl Model {
             * (p.gp * (self.kappa_plus[n] + self.kappa_plus[m])
                 + p.gm * (self.kappa_minus[n] + self.kappa_minus[m]));
         out(s, C64::new(diag, 0.0));
-        // Σ_j A_j ρ A_j† = L · P_Q[A_0 ρ A_0†]
-        for (g, tab) in [(p.gp, &self.a_plus), (p.gm, &self.a_minus)] {
+        // Σ_j A_j ρ A_j† = nt · P_Q[Σ_i A_i ρ A_i†], i over the sites of the unit cell with the jump
+        for (g, tabs) in [(p.gp, &self.a_plus), (p.gm, &self.a_minus)] {
             if g == 0.0 {
                 continue;
             }
-            let pref = g * l as f64;
-            for k1 in 0..l {
-                let la = &tab[msa][k1];
-                if la.is_empty() {
-                    continue;
-                }
-                let k2 = (k1 + l - q) % l;
-                let lb = &tab[msb][k2];
-                if lb.is_empty() {
-                    continue;
-                }
-                for &(r1, va) in la {
-                    let base = sec.off[k1] + ch.pos[k1][r1 as usize] as usize * sec.nb[k1];
-                    let pa = pref * va;
-                    for &(r2, vb) in lb {
-                        out(base + ch.pos[k2][r2 as usize] as usize, pa * vb.conj());
+            let pref = g * nt as f64;
+            for tab in tabs {
+                for k1 in 0..nt {
+                    let la = &tab[msa][k1];
+                    if la.is_empty() {
+                        continue;
+                    }
+                    let k2 = (k1 + nt - q) % nt;
+                    let lb = &tab[msb][k2];
+                    if lb.is_empty() {
+                        continue;
+                    }
+                    for &(r1, va) in la {
+                        let base = sec.off[k1] + ch.pos[k1][r1 as usize] as usize * sec.nb[k1];
+                        let pa = pref * va;
+                        for &(r2, vb) in lb {
+                            out(base + ch.pos[k2][r2 as usize] as usize, pa * vb.conj());
+                        }
                     }
                 }
             }
@@ -349,13 +406,13 @@ struct Sector {
 
 impl Sector {
     fn new(ch: &Chain, q: usize) -> Self {
-        let l = ch.l;
-        assert!((2 * q) % l == 0, "only Q = 0 and Q = L/2 are self-conjugate sectors");
-        let mut off = vec![0usize; l + 1];
-        let mut nb = vec![0usize; l];
+        let nt = ch.nt;
+        assert!((2 * q) % nt == 0, "only Q = 0 and Q = nt/2 are self-conjugate sectors");
+        let mut off = vec![0usize; nt + 1];
+        let mut nb = vec![0usize; nt];
         let mut elems = Vec::new();
-        for k in 0..l {
-            let kb = (k + l - q) % l;
+        for k in 0..nt {
+            let kb = (k + nt - q) % nt;
             off[k] = elems.len();
             nb[k] = ch.mom[kb].len();
             for &n in &ch.mom[k] {
@@ -364,7 +421,7 @@ impl Sector {
                 }
             }
         }
-        off[l] = elems.len();
+        off[nt] = elems.len();
         let dim = elems.len();
         let mut sec = Sector {
             q, dim, off, nb, elems, part: vec![0; dim], chi: vec![ZERO; dim],
@@ -373,12 +430,12 @@ impl Sector {
         for s in 0..dim {
             let (k, n, m) = sec.elems[s];
             let (k, n, m) = (k as usize, n as usize, m as usize);
-            let kb = (k + l - q) % l;
-            let kr = (l - k) % l;
+            let kb = (k + nt - q) % nt;
+            let kr = (nt - k) % nt;
             sec.part[s] = sec.index(ch, kr, ch.refl_rep[n] as usize, ch.refl_rep[m] as usize) as u32;
             let x = k as i64 * ch.refl_shift[n] as i64 - kb as i64 * ch.refl_shift[m] as i64;
             sec.chi[s] = ch.ph(-x);
-            let ks = (q + l - k) % l;
+            let ks = (q + nt - k) % nt;
             sec.spart[s] = sec.index(ch, ks, m, n) as u32;
             let odd = (ch.reps[n].count_ones() + ch.reps[m].count_ones()) % 2 == 1;
             sec.schi[s] = if odd { -1.0 } else { 1.0 };
@@ -389,7 +446,7 @@ impl Sector {
 
     #[inline]
     fn index(&self, ch: &Chain, k: usize, n: usize, m: usize) -> usize {
-        let kb = (k + ch.l - self.q) % ch.l;
+        let kb = (k + ch.nt - self.q) % ch.nt;
         self.off[k] + ch.pos[k][n] as usize * self.nb[k] + ch.pos[kb][m] as usize
     }
 }

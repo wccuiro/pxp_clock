@@ -12,7 +12,7 @@ plt.rcParams.update({
     'figure.titlesize': 10
 })
 
-filename = "../rust/decay.csv"
+filename = "../rust/decay_L14_gp0.001_gm0.2_omega1.csv"
 
 # 1. Read and parse the complex overlap data
 data_by_param = {}
@@ -63,7 +63,7 @@ for (gp, gm, omega), pdata in data_by_param.items():
     
     non_ss_indices = np.where(mask)[0]
     sorted_non_ss = non_ss_indices[np.argsort(weights_mag[mask])]
-    top_8_idx = sorted_non_ss[-14:]
+    top_8_idx = sorted_non_ss[-16:]
     
     # --- SMART GROUPING LOGIC FOR LABELS ---
     groups = {}

@@ -21,6 +21,12 @@ blockade, H = sum_j P_{j-1} X_j P_{j+1}, but the jumps use the soft projector
 so adjacent excitations are created for alpha < 1 and the full 2^L basis is needed.
 alpha = 1 gives P^alpha = |0><0| (the constrained model, embedded in the full basis).
 All builders take alpha = None for the constrained model.
+
+Staggered model, as in src/bin/lindblad_staggered (constrained basis): sigma^+ jumps only on the
+sites j = plus_site (mod 2), sigma^- jumps only on the other sublattice (plus_site = None: both on
+every site). The Neel state occupies the sublattice 0. Only the translation by two sites is left,
+so the sector builders take step = 2 and there is one sector with the Neel state, Q = 0.
+The tools read it from a last argument plus=0 or plus=1 (see plus_site_argument).
 """
 import numpy as np
 import scipy.sparse as sp
@@ -74,7 +80,7 @@ def soft_projector(L, state, site, alpha):
     return c_norm * (1.0 - alpha)
   return c_norm * (1.0 + alpha)
 
-def dissipation(L, states, index, gamma_plus, gamma_minus, alpha=None):
+def dissipation(L, states, index, gamma_plus, gamma_minus, alpha=None, plus_site=None):
   N = len(states)
   I = sp.identity(N, format='csr')
   D_minus = sp.csr_matrix((N**2, N**2))
@@ -93,9 +99,11 @@ def dissipation(L, states, index, gamma_plus, gamma_minus, alpha=None):
       if factor != 0.0:
         state_p = state ^ (1 << i)
         if state & 1<<i:
-          L_minus_i [ index[state_p], index[state]] += factor
+          if plus_site is None or i % 2 != plus_site:
+            L_minus_i [ index[state_p], index[state]] += factor
         else:
-          L_plus_i [ index[state_p], index[state]] += factor
+          if plus_site is None or i % 2 == plus_site:
+            L_plus_i [ index[state_p], index[state]] += factor
 
     L_minus_i = L_minus_i.tocsr()
     L_plus_i = L_plus_i.tocsr()
@@ -120,23 +128,25 @@ def lindblad_evolution(H, D):
 ###################### TRANSLATION SECTORS ##################################
 #############################################################################
 
-def translation(L, state):
-  return ((state << 1) | (state >> (L - 1))) & ((1 << L) - 1)
+def translation(L, state, step=1):
+  return ((state << step) | (state >> (L - step))) & ((1 << L) - 1)
 
-def sector_basis(L, states, index, Q):
+def sector_basis(L, states, index, Q, step=1):
   """
-  Orthonormal basis of the operators with T rho T^dag = e^{-i 2 pi Q / L} rho, for Q = 0 or L/2:
+  Orthonormal basis of the operators with U rho U^dag = e^{-i 2 pi Q / nt} rho, U = T^step the
+  translation by `step` sites and nt = L / step, for Q = 0 or nt/2:
 
-      (1/sqrt(p)) sum_{d<p} s^d |T^d a><T^d b|,   s = +1 (Q = 0), -1 (Q = L/2),
+      (1/sqrt(p)) sum_{d<p} s^d |U^d a><U^d b|,   s = +1 (Q = 0), -1 (Q = nt/2),
 
-  one vector per orbit of pairs (a, b) with period p (only even p for Q = L/2).
+  one vector per orbit of pairs (a, b) with period p (only even p for Q = nt/2).
   Returns B (N^2 x dim, real, B^T B = 1).
   """
-  if Q not in (0, L // 2) or L % 2:
-    raise ValueError("only Q = 0 and Q = L/2 (even L) are implemented")
+  nt = L // step
+  if L % 2 or L % step or not (Q == 0 or 2 * Q == nt):
+    raise ValueError("only Q = 0 and Q = nt/2 (even L, nt = L/step) are implemented")
 
   N = len(states)
-  T = [index[translation(L, s)] for s in states]
+  T = [index[translation(L, s, step)] for s in states]
   seen = np.zeros(N * N, dtype=bool)
   rows, cols, vals = [], [], []
   dim = 0
@@ -152,7 +162,7 @@ def sector_basis(L, states, index, Q):
         orbit.append(x * N + y)
         x, y = T[x], T[y]
       p = len(orbit)
-      if (Q * p) % L != 0:
+      if (Q * p) % nt != 0:
         continue
       for d, idx in enumerate(orbit):
         rows.append(idx)
@@ -204,15 +214,25 @@ def trace_vectors(L, states, index):
 ###################### FULL MODEL ###########################################
 #############################################################################
 
-def build_model(L, gamma_plus, gamma_minus, omega, alpha=None):
+def build_model(L, gamma_plus, gamma_minus, omega, alpha=None, plus_site=None):
   states, index = generation_basis(L, constrained=(alpha is None))
   H = Hamiltonian(L, states, index, omega)
-  D = dissipation(L, states, index, gamma_plus, gamma_minus, alpha)
+  D = dissipation(L, states, index, gamma_plus, gamma_minus, alpha, plus_site)
   Lind = lindblad_evolution(H, D)
   return states, index, Lind
 
-def sectors(L):
-  return [0, L // 2]
+def sectors(L, step=1):
+  """Sectors that contain the Neel state: Q = 0 and L/2 of T, or Q = 0 of the translation by two sites."""
+  return [0, L // 2] if step == 1 else [0]
+
+def plus_site_argument(argv):
+  """Removes a last argument plus=0 / plus=1 from argv. Returns (plus_site or None, translation step)."""
+  if len(argv) > 1 and argv[-1].startswith("plus="):
+    plus_site = int(argv.pop()[len("plus="):])
+    if plus_site not in (0, 1):
+      raise SystemExit("plus= must be 0 or 1")
+    return plus_site, 2
+  return None, 1
 
 #############################################################################
 ###################### REFLECTION, S AND HERMITICITY ########################
@@ -259,14 +279,14 @@ def symmetry_blocks(B, R, S):
       blocks[(sigma, tau)] = (0.25 * (one + sigma * R_Q) @ (one + tau * S_Q)).tocsr()
   return blocks, residual
 
-def block_sizes(L, constrained=True):
+def block_sizes(L, constrained=True, step=1):
   """
-  Sizes of the blocks (sigma, tau) of the sectors Q = 0 and Q = L/2 without building anything,
-  from the number F(g) of configurations fixed by g:
+  Sizes of the blocks (sigma, tau) of the sectors of sectors(L, step) without building anything,
+  from the number F(g) of configurations fixed by g (U = T^step, nt = L / step):
 
-      dim = 1/(4L) sum_d s_Q^d [ F(T^d)^2 + sigma F(T^d R)^2 + tau F(T^{2d}) + sigma tau N ],
+      dim = 1/(4 nt) sum_{d<nt} s_Q^d [ F(U^d)^2 + sigma F(U^d R)^2 + tau F(U^{2d}) + sigma tau N ],
 
-  s_Q = +1 (Q = 0), -1 (Q = L/2). Returns {Q: {(sigma, tau): dim}}.
+  s_Q = +1 (Q = 0), -1 (Q = nt/2). Returns {Q: {(sigma, tau): dim}}.
   """
   mask = (1 << L) - 1
   x = np.arange(1 << L, dtype=np.int64)
@@ -279,14 +299,15 @@ def block_sizes(L, constrained=True):
     refl |= ((x >> j) & 1) << ((L - j) % L)
   fixed = lambda y: int(np.count_nonzero(y == x))
 
+  nt = L // step
   sizes = {}
-  for Q in sectors(L):
+  for Q in sectors(L, step):
     total = {(sigma, tau): 0 for sigma in (1, -1) for tau in (1, -1)}
-    for d in range(L):
+    for d in range(nt):
       s_Q = -1 if (Q != 0 and d % 2) else 1
-      f_T, f_TR, f_T2 = fixed(rot(x, d)), fixed(rot(refl, d)), fixed(rot(x, 2 * d))
+      f_T, f_TR, f_T2 = fixed(rot(x, step * d)), fixed(rot(refl, step * d)), fixed(rot(x, 2 * step * d))
       for (sigma, tau) in total:
         total[(sigma, tau)] += s_Q * (f_T**2 + sigma * f_TR**2 + tau * f_T2 + sigma * tau * N)
-    assert all(v % (4 * L) == 0 for v in total.values())
-    sizes[Q] = {key: v // (4 * L) for key, v in total.items()}
+    assert all(v % (4 * nt) == 0 for v in total.values())
+    sizes[Q] = {key: v // (4 * nt) for key, v in total.items()}
   return sizes

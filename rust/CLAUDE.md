@@ -21,6 +21,8 @@ src/bin/lindblad/main.rs           diagonalization (LAPACK dgeev via MKL), OEE, 
 src/bin/lindblad_evol/main.rs      time evolution of the Néel state (pure Rust, no LAPACK)
 src/bin/lindblad_alpha/main.rs     the same two for the partial projection (alpha) model,
 src/bin/lindblad_alpha_evol/main.rs  full 2^L basis (see the alpha section)
+src/bin/lindblad_staggered/main.rs       the same two for staggered jumps (σ+ on one sublattice,
+src/bin/lindblad_staggered_evol/main.rs  σ- on the other), see the staggered section
 src/bin/lindblad_asymmetric*, trajectories   old code, not on common.rs; the asymmetric ones need `sprs`,
                                    which is not in Cargo.toml, so always build with --bin <name>
 tools/                             independent Python references + comparison scripts (see Validation)
@@ -32,7 +34,10 @@ cargo run --release --bin lindblad  -- [L] [gp gm omega]          # no params: g
 cargo run --release --bin lindblad_evol -- [L] [T] [dt] [gp gm omega]
 cargo run --release --bin lindblad_alpha      -- [L] [gp gm omega alpha]            # partial projection, see below
 cargo run --release --bin lindblad_alpha_evol -- [L] [T] [dt] [gp gm omega alpha]
-cargo build --release --bin lindblad --bin lindblad_evol --bin lindblad_alpha --bin lindblad_alpha_evol
+cargo run --release --bin lindblad_staggered      -- [L] [gp gm omega] [plus_site]          # staggered jumps, see below
+cargo run --release --bin lindblad_staggered_evol -- [L] [T] [dt] [gp gm omega] [plus_site]
+cargo build --release --bin lindblad --bin lindblad_evol --bin lindblad_alpha --bin lindblad_alpha_evol \
+                      --bin lindblad_staggered --bin lindblad_staggered_evol
 # without MKL (testing): cargo build --release --no-default-features --features netlib
 ```
 Threads: `MKL_NUM_THREADS` (eigensolver), `RAYON_NUM_THREADS` (matrix build, OEE, evolution).
@@ -105,6 +110,66 @@ with the alpha grid. The Model is rebuilt for every alpha (cheap).
 - The old alpha binaries (git history before this change) had the Q = π real-space expansion bug in
   the OEE, RK4 time stepping with 1e-10 thresholds, and paired left/right eigenvectors by sorting.
 
+## Staggered jumps: lindblad_staggered, lindblad_staggered_evol (2026-10-09)
+
+σ+ jumps (P σ+ P, rate γ+) only on the sublattice j ≡ plus_site (mod 2), σ- jumps (rate γ-) only on
+the other one; H unchanged. The Néel state (bits 0, 2, ...) occupies the sublattice 0.
+- plus_site = 1 (default, `PLUS_SITE`): σ- on the Néel-occupied sites, σ+ on the others. This is the
+  convention of the old lindblad_asymmetric binaries; the shifted Néel state is dark for the jumps.
+- plus_site = 0: σ+ on the Néel-occupied sites (julia/pxp_lindblad_staggered.jl); the Néel state is dark.
+- The two are the same Lindbladian shifted by one site: same spectrum, different Néel dynamics.
+- Symmetries (checked on the full Lindbladian, L = 6, 8, 10, `tools/check_symmetries.py ... plus=1`):
+  T (one site) and the bond-centred reflections are LOST (residual ~γ); T², R (j -> -j), S and Θ hold.
+  No further symmetry: no degeneracy inside or between the four blocks at generic parameters.
+- common.rs: `Chain::with_step(l, true, 2)` (orbits, momenta k = 0..L/2-1 and phases of U = T²;
+  `ch.step`, `ch.nt = L/step`; every momentum loop runs over nt, `ch.l` stays the number of sites) and
+  `Model::staggered(&ch, plus_site)` (one jump table per sublattice, H = Σ_u U^u (h_0 + h_1) U^-u).
+  `Chain::new` / `Model::new` are the step = 1 case; the uniform lindblad_evol output is byte-identical
+  to the binary built before the change (L = 8, 10 grid, 12).
+- The Néel state is T²-invariant: ONE sector, Q = 0 of T², = the old Q = 0 ⊕ Q = L/2. Its (+,+) block
+  holds the Néel state, the trace, n and nn; block sizes (+,+)/(+,-)/(-,+)/(-,-) are the sums of the
+  two old sectors: L=8 203/166/95/105, L=10 906/831/624/672, L=12 4736/4519/3997/4102,
+  L=14 26380/25897/24446/24806; L=16 (+,+) = 154961. Dense diagonalization: one block of twice the
+  size, i.e. ~4× the time and RAM of `lindblad` (L=14: 2 × 8 × 26380² = 11 GB); L=16 needs ILP64.
+- Outputs: *_staggered.csv, rows q,gp,gm,omega,... with q = 0 (single point from the command line:
+  names end in _staggered_L.._gp.._gm.._omega..); occupation_time_staggered.csv rows gp,gm,omega,(n,nn,F)*.
+  plot_scripts/sym_vs_asym_evol.py still reads the old occupation_time_asymmetric.csv.
+- Validation against the Python references (test builds, see below; the release binaries had not
+  been built yet): lindblad_staggered_evol at L = 4, 6, 8, 10, both plus_site, five parameter points:
+  n, nn, F ≤ 2e-14. lindblad_staggered at L = 6, 8 (both plus_site) and L = 10 (plus_site = 1):
+  eigenvalues ≤ 2e-13, |c|, |o|, c conj(o), w ≤ 7e-11, OEE 5e-7 (print precision), steady state 5e-16.
+  The uniform `lindblad` rebuilt from the changed common.rs still passes compare_diag at L = 8.
+  ```bash
+  python3 tools/check_symmetries.py 8 0.2 0.001 1.0 plus=1          # also: sizes 10 staggered
+  python3 tools/reference_evolution.py 8 25 0.01 0.2 0.001 1.0 ref8s.npy plus=1
+  python3 tools/compare_evolution.py ref8s.npy occupation_time_staggered.csv
+  python3 tools/reference_diag.py 8 0.2 0.001 1.0 ref8s.json plus=1
+  python3 tools/compare_diag.py ref8s.json run_dir                  # run: lindblad_staggered 8 0.2 0.001 1.0 1
+  ```
+- Performance of lindblad_staggered_evol (T=15, dt=0.01, 4 threads): L=12 1.3 s / 11 MB (nnz 0.13 M),
+  L=14 6 s / 65 MB (nnz 1.33 M): cheaper than the uniform model (half the jump channels).
+- Physics (L ≤ 8, exact, target/claude_tmp/staggered/revivals*.py, stag_mag.py): both conventions
+  raise the Néel fidelity revivals over the uniform model, but only as much as the uniform model with
+  halved rates does (within 1-3%); plus_site = 1 has the slightly higher first revival, plus_site = 0
+  the slightly higher late-time fidelity. The staggered magnetization shows the same.
+  Search over local static variants (local_search.py, local_long.py, local_control.py, L = 6, 8):
+  the sublattice never matters (a jump on N, on O, or on all sites at half the rate give the same F
+  within ~1%), σ- costs more than σ+ at equal rate, a staggered field in H does not help, and no
+  variant exceeds the closed-system revivals. Jumps conditioned on the next-nearest neighbours so
+  that they vanish on both Néel states do far less damage: "heal" n_{j-2} Pσ+_jP n_{j+2} (first
+  revival 0.76 at rate 0.2, L=8, against 0.22 for plain staggered and 0.90 closed) and "clean"
+  (1-n_{j-2}) Pσ-_jP (1-n_{j+2}) (0.71). Not implemented in Rust.
+  This gain is trivial too (the user's point, confirmed with equal_jumps.py): at an EQUAL NUMBER OF
+  JUMP EVENTS up to the revival, J = ∫ Σ γ Tr(A†A ρ) dt, heal and plain σ+ give the same fidelity
+  (L=8: 0.760/0.615 against 0.771/0.612 at J = 0.50), and clean is only modestly better than plain
+  σ- (0.705/0.520 against 0.646/0.430). To leading order F at a revival depends only on J.
+- Test builds that are safe on the workstation (throwaway crates under target/claude_tmp/staggered/,
+  sources are symlinks to src/, run with `ulimit -v 2500000` and `cargo build --release --offline -j 1`):
+  `light/` (rayon + num-complex only; lindblad_evol, lindblad_staggered_evol; 3 s, 0.3 GB) and
+  `light_diag/` (lindblad, lindblad_staggered; LAPACK from anaconda's libmkl_rt.so through build.rs,
+  dependencies at opt-level 1, no LTO; 2 min, peak 1.0 GB; run with MKL_NUM_THREADS=2).
+  Use them instead of the static-MKL fat-LTO release build to test changes to common.rs.
+
 ## Algorithms
 
 - lindblad: per block, real dense matrix → `dgeev` (right eigenvectors only). Néel coefficients by
@@ -158,6 +223,25 @@ the evolution at L=14 agrees with the eigen-expansion of the diagonalization to 
   With S the eigensolves should drop ~4× (n³ scaling). OEE (~101k modes × ~1 s) is now the bottleneck.
 - L=14 evolution (T=25, dt=0.01): 76 s on 2 cores; L=12: ~10 s.
 - Peak RAM lindblad ≈ 2 × 8 × n_max² bytes (+ ~90 MB per thread for OEE at L=14).
+- Diagonalization cost model (2026-10-09). dgeev with vectors on the 112-core node: 1.1e-10 · n³ s
+  (from the 2.0 h above, Σ n³ = 6.56e13); eigenvalues only costs 0.6 of that (measured locally,
+  n ≈ 2.2k: 1.1e-10 against 1.8e-10 n³ on 4 laptop threads). Peak RSS measured locally:
+  staggered L=12 (n = 4736, OEE on) 479 MB = 19 n² bytes after the ~45 MB baseline, so use 16-20 n².
+  Estimates per parameter point with OEE: staggered L=14 ≈ 3.2 h, 11-15 GB (same block sizes and
+  mode count as the measured run); alpha L=10 (8 blocks of ~26k, 209.7k modes) ≈ 4.4 h eig + 2.4-4.3 h
+  OEE, 12-16 GB. Not feasible: staggered L=16 (n = 154961: 385-480 GB, 4.7 days per block, ILP64),
+  alpha L=12 (n = 353384: 2 TB).
+- lindblad_evol with the (+,+) blocks (2026-10-09, i7-12650H, gp=0.2 gm=0.001 Ω=1; logs and the
+  scripts count_nnz.py / predict.py in target/claude_tmp/ramtime/):
+  nnz per block (Q=0): L=10 18522, L=12 194986, L=14 2935080, L=16 24792228 (319 per row);
+  ||A-μ||_1 = 22.2 / 28.4 / 35.5 / 43.9 for L = 10..16 (≈ 2ΩL + a γ+ term growing like L²).
+  Peak RSS (in build_csr, where `cols` and the CSR coexist; independent of T, dt, threads and of the
+  number of parameter points): L=12 13 MiB, L=14 108 MiB, L=16 0.95 GiB ≈ 37 B·nnz_block + 310 B·D_sector.
+  Extrapolated with the exact sector pattern count × measured block/sector ratio (0.14-0.18):
+  L=18 ≈ 10 GiB (8.6-11.3), L=20 ≈ 80 GiB (70-98). L=18 was NOT run here (too close to 15 GiB).
+  Time per matrix product (one block): L=14 0.68 ms, L=16 6.7 ms at 4 threads; no gain beyond
+  4 threads (memory bandwidth), 1 thread is 2.6× slower. Products per step ≈ 7-10 for dt ≤ 0.01,
+  the total for fixed T is nearly flat for dt ≥ 0.1. T=15, dt=0.01, both sectors: L=14 20 s, L=16 3.7 min.
 
 ## Pitfalls already hit (do not reintroduce)
 
