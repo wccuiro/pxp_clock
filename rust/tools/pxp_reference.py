@@ -22,7 +22,7 @@ so adjacent excitations are created for alpha < 1 and the full 2^L basis is need
 alpha = 1 gives P^alpha = |0><0| (the constrained model, embedded in the full basis).
 All builders take alpha = None for the constrained model.
 
-Staggered model, as in src/bin/lindblad_staggered (constrained basis): sigma^+ jumps only on the
+Staggered model, as in src/bin/lindblad_asymmetric (constrained basis): sigma^+ jumps only on the
 sites j = plus_site (mod 2), sigma^- jumps only on the other sublattice (plus_site = None: both on
 every site). The Neel state occupies the sublattice 0. Only the translation by two sites is left,
 so the sector builders take step = 2 and there is one sector with the Neel state, Q = 0.

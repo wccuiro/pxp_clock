@@ -21,10 +21,11 @@ src/bin/lindblad/main.rs           diagonalization (LAPACK dgeev via MKL), OEE, 
 src/bin/lindblad_evol/main.rs      time evolution of the Néel state (pure Rust, no LAPACK)
 src/bin/lindblad_alpha/main.rs     the same two for the partial projection (alpha) model,
 src/bin/lindblad_alpha_evol/main.rs  full 2^L basis (see the alpha section)
-src/bin/lindblad_staggered/main.rs       the same two for staggered jumps (σ+ on one sublattice,
-src/bin/lindblad_staggered_evol/main.rs  σ- on the other), see the staggered section
-src/bin/lindblad_asymmetric*, trajectories   old code, not on common.rs; the asymmetric ones need `sprs`,
-                                   which is not in Cargo.toml, so always build with --bin <name>
+src/bin/lindblad_asymmetric/main.rs       the same two for staggered jumps (σ+ on one sublattice,
+src/bin/lindblad_asymmetric_evol/main.rs  σ- on the other), see the staggered section; rewritten on
+                                   common.rs on 2026-10-10 (the old Euler/sprs code is in git history)
+src/bin/trajectories               old code, not on common.rs; needs `rand`, `rand_distr`, which are
+                                   not in Cargo.toml, so always build with --bin <name>
 tools/                             independent Python references + comparison scripts (see Validation)
 ALPHA_NOTES.md                     evaluation, measurements and state of the alpha work (2026-10-09)
 ```
@@ -34,10 +35,10 @@ cargo run --release --bin lindblad  -- [L] [gp gm omega]          # no params: g
 cargo run --release --bin lindblad_evol -- [L] [T] [dt] [gp gm omega]
 cargo run --release --bin lindblad_alpha      -- [L] [gp gm omega alpha]            # partial projection, see below
 cargo run --release --bin lindblad_alpha_evol -- [L] [T] [dt] [gp gm omega alpha]
-cargo run --release --bin lindblad_staggered      -- [L] [gp gm omega] [plus_site]          # staggered jumps, see below
-cargo run --release --bin lindblad_staggered_evol -- [L] [T] [dt] [gp gm omega] [plus_site]
+cargo run --release --bin lindblad_asymmetric      -- [L] [gp gm omega] [plus_site]          # staggered jumps, see below
+cargo run --release --bin lindblad_asymmetric_evol -- [L] [T] [dt] [gp gm omega] [plus_site]
 cargo build --release --bin lindblad --bin lindblad_evol --bin lindblad_alpha --bin lindblad_alpha_evol \
-                      --bin lindblad_staggered --bin lindblad_staggered_evol
+                      --bin lindblad_asymmetric --bin lindblad_asymmetric_evol
 # without MKL (testing): cargo build --release --no-default-features --features netlib
 ```
 Threads: `MKL_NUM_THREADS` (eigensolver), `RAYON_NUM_THREADS` (matrix build, OEE, evolution).
@@ -83,9 +84,9 @@ call `Chain::new(l, true)`, `Model::new(&ch, None)`). The jumps stay real with C
 symmetries, blocks and algorithms apply; the two binaries are copies of lindblad / lindblad_evol
 with the alpha grid. The Model is rebuilt for every alpha (cheap).
 
-- Outputs: *_alpha.csv with rows q,gp,gm,omega,alpha,... (decay_alpha.csv has the same 8 columns
-  per mode as decay.csv, last pair = w); occupation_time_alpha.csv rows alpha,gp,gm,omega,(n,nn,F)*.
-  A single point from the command line gives names ending in _alpha_L.._gp.._gm.._omega.._alpha...
+- Outputs: *_alpha_L.._gp.._gm.._omega.._alpha...csv with rows q,gp,gm,omega,alpha,... (decay_alpha
+  has the same 8 columns per mode as decay, last pair = w); occupation_time_alpha_evol_L.._alpha...csv
+  rows alpha,gp,gm,omega,(n,nn,F)*. File names: see Outputs.
 - Block sizes (+,+)/(+,-)/(-,+)/(-,-): L=8 Q=0: 2299/2136/1851/1944, Q=4: 2169/2136/1977/1944;
   L=10 Q=0: 27190/26574/25398/25806, Q=5: 26574/26574/25806/25806; L=12 (+,+): 353384 / 351324.
   Dense diagonalization stops at L=10 (cluster); L=12 only for the evolution, memory not measured.
@@ -110,12 +111,17 @@ with the alpha grid. The Model is rebuilt for every alpha (cheap).
 - The old alpha binaries (git history before this change) had the Q = π real-space expansion bug in
   the OEE, RK4 time stepping with 1e-10 thresholds, and paired left/right eigenvectors by sorting.
 
-## Staggered jumps: lindblad_staggered, lindblad_staggered_evol (2026-10-09)
+## Staggered jumps: lindblad_asymmetric, lindblad_asymmetric_evol (2026-10-09)
+
+The user calls the model staggered and the binaries asymmetric: these two binaries were REPLACED in
+place (the user did not want new lindblad_asymmetric* binaries next to them). The output files carry
+the tag _staggered.
+
 
 σ+ jumps (P σ+ P, rate γ+) only on the sublattice j ≡ plus_site (mod 2), σ- jumps (rate γ-) only on
 the other one; H unchanged. The Néel state (bits 0, 2, ...) occupies the sublattice 0.
 - plus_site = 1 (default, `PLUS_SITE`): σ- on the Néel-occupied sites, σ+ on the others. This is the
-  convention of the old lindblad_asymmetric binaries; the shifted Néel state is dark for the jumps.
+  convention these binaries had before the rewrite; the shifted Néel state is dark for the jumps.
 - plus_site = 0: σ+ on the Néel-occupied sites (julia/pxp_lindblad_staggered.jl); the Néel state is dark.
 - The two are the same Lindbladian shifted by one site: same spectrum, different Néel dynamics.
 - Symmetries (checked on the full Lindbladian, L = 6, 8, 10, `tools/check_symmetries.py ... plus=1`):
@@ -131,22 +137,22 @@ the other one; H unchanged. The Néel state (bits 0, 2, ...) occupies the sublat
   two old sectors: L=8 203/166/95/105, L=10 906/831/624/672, L=12 4736/4519/3997/4102,
   L=14 26380/25897/24446/24806; L=16 (+,+) = 154961. Dense diagonalization: one block of twice the
   size, i.e. ~4× the time and RAM of `lindblad` (L=14: 2 × 8 × 26380² = 11 GB); L=16 needs ILP64.
-- Outputs: *_staggered.csv, rows q,gp,gm,omega,... with q = 0 (single point from the command line:
-  names end in _staggered_L.._gp.._gm.._omega..); occupation_time_staggered.csv rows gp,gm,omega,(n,nn,F)*.
-  plot_scripts/sym_vs_asym_evol.py still reads the old occupation_time_asymmetric.csv.
-- Validation against the Python references (test builds, see below; the release binaries had not
-  been built yet): lindblad_staggered_evol at L = 4, 6, 8, 10, both plus_site, five parameter points:
-  n, nn, F ≤ 2e-14. lindblad_staggered at L = 6, 8 (both plus_site) and L = 10 (plus_site = 1):
+- Outputs: *_staggered_L.._gp.._gm.._omega...csv, rows q,gp,gm,omega,... with q = 0;
+  occupation_time_staggered_evol_L.._gp.._gm.._omega...csv rows gp,gm,omega,(n,nn,F)*. File names: see
+  Outputs. plot_scripts/sym_vs_asym_evol.py still reads the old occupation_time_asymmetric.csv.
+- Validation against the Python references (test builds, see below; the release binaries built by
+  the user on 2026-10-10 pass the same checks at L = 8): lindblad_asymmetric_evol at L = 4, 6, 8, 10, both plus_site, five parameter points:
+  n, nn, F ≤ 2e-14. lindblad_asymmetric at L = 6, 8 (both plus_site) and L = 10 (plus_site = 1):
   eigenvalues ≤ 2e-13, |c|, |o|, c conj(o), w ≤ 7e-11, OEE 5e-7 (print precision), steady state 5e-16.
   The uniform `lindblad` rebuilt from the changed common.rs still passes compare_diag at L = 8.
   ```bash
   python3 tools/check_symmetries.py 8 0.2 0.001 1.0 plus=1          # also: sizes 10 staggered
   python3 tools/reference_evolution.py 8 25 0.01 0.2 0.001 1.0 ref8s.npy plus=1
-  python3 tools/compare_evolution.py ref8s.npy occupation_time_staggered.csv
+  python3 tools/compare_evolution.py ref8s.npy occupation_time_staggered_evol_L8_gp0.2_gm0.001_omega1.csv
   python3 tools/reference_diag.py 8 0.2 0.001 1.0 ref8s.json plus=1
-  python3 tools/compare_diag.py ref8s.json run_dir                  # run: lindblad_staggered 8 0.2 0.001 1.0 1
+  python3 tools/compare_diag.py ref8s.json run_dir                  # run: lindblad_asymmetric 8 0.2 0.001 1.0 1
   ```
-- Performance of lindblad_staggered_evol (T=15, dt=0.01, 4 threads): L=12 1.3 s / 11 MB (nnz 0.13 M),
+- Performance of lindblad_asymmetric_evol (T=15, dt=0.01, 4 threads): L=12 1.3 s / 11 MB (nnz 0.13 M),
   L=14 6 s / 65 MB (nnz 1.33 M): cheaper than the uniform model (half the jump channels).
 - Physics (L ≤ 8, exact, target/claude_tmp/staggered/revivals*.py, stag_mag.py): both conventions
   raise the Néel fidelity revivals over the uniform model, but only as much as the uniform model with
@@ -165,8 +171,8 @@ the other one; H unchanged. The Néel state (bits 0, 2, ...) occupies the sublat
   σ- (0.705/0.520 against 0.646/0.430). To leading order F at a revival depends only on J.
 - Test builds that are safe on the workstation (throwaway crates under target/claude_tmp/staggered/,
   sources are symlinks to src/, run with `ulimit -v 2500000` and `cargo build --release --offline -j 1`):
-  `light/` (rayon + num-complex only; lindblad_evol, lindblad_staggered_evol; 3 s, 0.3 GB) and
-  `light_diag/` (lindblad, lindblad_staggered; LAPACK from anaconda's libmkl_rt.so through build.rs,
+  `light/` (rayon + num-complex only; lindblad_evol, lindblad_asymmetric_evol; 3 s, 0.3 GB) and
+  `light_diag/` (lindblad, lindblad_asymmetric; LAPACK from anaconda's libmkl_rt.so through build.rs,
   dependencies at opt-level 1, no LTO; 2 min, peak 1.0 GB; run with MKL_NUM_THREADS=2).
   Use them instead of the static-MKL fat-LTO release build to test changes to common.rs.
 
@@ -185,6 +191,14 @@ the other one; H unchanged. The Néel state (bits 0, 2, ...) occupies the sublat
 
 ## Outputs
 
+File names (all six binaries, 2026-10-10; the structure is the one of `lindblad`):
+    <file><tag>_L<L>_gp<gp>_gm<gm>_omega<omega>[_alpha<alpha>].csv
+with the values of the FIRST parameter point (also for a grid: all its rows go into that one file)
+and <tag> = "" (lindblad), _evol, _alpha, _alpha_evol, _staggered, _staggered_evol. Examples:
+decay_L14_gp0.001_gm0.2_omega1.csv, occupation_time_evol_L10_gp0.001_gm0.001_omega1.csv,
+eigenvalues_alpha_L8_gp0.2_gm0.001_omega1_alpha0.4.csv, occupation_time_staggered_evol_L14_gp0.2_gm0.001_omega1.csv.
+The plain names below are the <file> part. The plot scripts have their own hard-coded input names.
+
 lindblad: eigenvalues.csv, decay.csv (per mode: Re λ, Im λ, c, o, w; w_k = c_k Tr(n r_k) so that
 <n>(t) = Σ w_k e^{λ_k t}; c and o individually carry an arbitrary LAPACK phase, |c|, |o|, c·conj(o)
 and w are phase-invariant), oee.csv, std_eigenvalues.csv, occupation.csv, optional cond.csv.
@@ -198,8 +212,8 @@ python3 tools/reference_diag.py 8 0.2 0.001 1.0 ref8.json
 (mkdir -p run8 && cd run8 && ../target/release/lindblad 8 0.2 0.001 1.0)
 python3 tools/compare_diag.py ref8.json run8        # expect eigenvalues ~1e-10, |c|,|o| ~1e-10, OEE ~1e-6 (print precision)
 python3 tools/reference_evolution.py 8 25 0.01 0.2 0.001 1.0 ref8.npy
-(mkdir -p evo8 && cd evo8 && ../target/release/evolution 8 25 0.01 0.2 0.001 1.0)
-python3 tools/compare_evolution.py ref8.npy evo8/occupation_time.csv   # expect ~1e-14
+(mkdir -p evo8 && cd evo8 && ../target/release/lindblad_evol 8 25 0.01 0.2 0.001 1.0)
+python3 tools/compare_evolution.py ref8.npy evo8/occupation_time_evol_L8_gp0.2_gm0.001_omega1.csv   # expect ~1e-14
 ```
 Partial projection (alpha) model of src/bin/lindblad_alpha*: the same tools with a trailing alpha
 (full 2^L basis; L = 6 takes seconds, reference_diag.py at L = 8 needs 4.8 GB and 11-17 min):
@@ -209,7 +223,7 @@ python3 tools/check_symmetries.py sizes 10 full            # block sizes only (n
 python3 tools/reference_diag.py 6 0.2 0.001 1.0 ref6a.json 0.4
 python3 tools/compare_diag.py ref6a.json run_dir           # rows must start with q,gp,gm,omega,alpha
 python3 tools/reference_evolution.py 6 10 0.001 0.2 0.001 1.0 ref6a.npy 0.4
-python3 tools/compare_evolution.py ref6a.npy occupation_time_alpha.csv 0.2 0.001 1.0 0.4
+python3 tools/compare_evolution.py ref6a.npy occupation_time_alpha_evol_L6_gp0.2_gm0.001_omega1_alpha0.4.csv
 ```
 Built-in checks printed at runtime: Σ c·Tr(r) = 1 and Σ w = 0.5 in Q=0 (Néel), 0 in Q=π;
 "max dropped Im" ~1e-15; blocks cover the sector (asserted).

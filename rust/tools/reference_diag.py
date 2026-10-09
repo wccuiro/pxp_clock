@@ -5,7 +5,7 @@ Reference diagonalization of the PXP Lindbladian (independent of the Rust code).
 
 With alpha it is the partial projection model of src/bin/lindblad_alpha (full 2^L basis,
 see pxp_reference.py); without it the constrained model. With plus=0 or plus=1 it is the staggered
-model of src/bin/lindblad_staggered (sigma^+ only on the sites j = plus mod 2, sigma^- on the others).
+model of src/bin/lindblad_asymmetric (sigma^+ only on the sites j = plus mod 2, sigma^- on the others).
 
 For the sectors Q = 0 and Q = L/2 (staggered: the sector Q = 0 of the translation by two sites) it writes, per eigenmode k of the dense sector matrix:
   lambda_k

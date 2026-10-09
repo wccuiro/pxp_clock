@@ -13,7 +13,9 @@
 //!     (diagonalized with dgeev instead of zgeev).
 //! The Néel state, the trace and the observables n, nn live only in (σ, τ) = (+, +).
 //!
-//! Outputs (same files and column layouts as before, rows ordered by sector then parameters):
+//! Outputs (same column layouts as before, rows ordered by sector then parameters). Every name
+//! ends in _L.._gp.._gm.._omega.. with the values of the first parameter point, for example
+//! eigenvalues_L14_gp0.2_gm0.001_omega1.csv:
 //!   eigenvalues.csv     q,gp,gm,omega, (re,im)*
 //!   decay.csv           q,gp,gm,omega, (re,im, c.re,c.im, o.re,o.im, w.re,w.im)*
 //!                         c_k: Néel expansion coefficient on the unit-norm right eigenvector r_k

@@ -5,7 +5,7 @@ Reference time evolution of the Neel state under the PXP Lindbladian (independen
 
 With alpha it is the partial projection model of src/bin/lindblad_alpha (full 2^L basis,
 see pxp_reference.py); without it the constrained model. With plus=0 or plus=1 it is the staggered
-model of src/bin/lindblad_staggered (sigma^+ only on the sites j = plus mod 2, sigma^- on the others).
+model of src/bin/lindblad_asymmetric (sigma^+ only on the sites j = plus mod 2, sigma^- on the others).
 
 rho(t) is propagated in the translation sectors Q = 0 and Q = L/2 (staggered: the sector Q = 0 of
 the translation by two sites) with the dense matrix

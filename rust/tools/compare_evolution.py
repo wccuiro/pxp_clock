@@ -3,8 +3,10 @@ Compare the output of the Rust time evolution with a reference written by refere
 
     python3 tools/compare_evolution.py ref.npy occupation_time.csv [gp gm omega [alpha]]
 
-occupation_time.csv has one line per parameter point: gp, gm, omega, then n, nn, F at t = i dt.
-occupation_time_alpha.csv (partial projection) starts with alpha, gp, gm, omega instead.
+occupation_time.csv is the file written by lindblad_evol, lindblad_asymmetric_evol or lindblad_alpha_evol
+(occupation_time[_staggered|_alpha]_evol_L.._gp.._gm.._omega..[_alpha..].csv). It has one line per
+parameter point: gp, gm, omega, then n, nn, F at t = i dt; the partial projection file starts with
+alpha, gp, gm, omega instead.
 With several lines, give gp gm omega (and alpha) to choose the one to compare.
 
 Exit status 1 if any difference is above the tolerance.

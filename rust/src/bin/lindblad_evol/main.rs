@@ -14,7 +14,8 @@
 //! scipy's expm_multiply, trace shift μ = Tr(L)/n. The trace is conserved; max |Tr ρ(t) - 1|
 //! is printed as a check.
 //!
-//! Output: occupation_time.csv, one line per parameter point:
+//! Output: occupation_time_evol_L.._gp.._gm.._omega...csv (named as the files of `lindblad`, with
+//! the values of the first parameter point), one line per parameter point:
 //!   gp,gm,omega, then n, nn, F at t = i·dt, i = 0..=round(T/dt)
 //!   n = (1/L) Σ_j <n_j>,  nn = (1/L) Σ_j <n_{j-1} n_{j+1}>,  F = <Néel|ρ(t)|Néel>
 //!
@@ -193,7 +194,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     let dot = |u: &[f64], w: &[f64]| -> f64 { u.iter().zip(w).map(|(a, b)| a * b).sum() };
-    let mut file_occupation = BufWriter::new(File::create("occupation_time.csv")?);
+    let p0 = &cfg.params[0];
+    let name = format!("occupation_time_evol_L{}_gp{}_gm{}_omega{}.csv", l, p0.gp, p0.gm, p0.omega);
+    let mut file_occupation = BufWriter::new(File::create(name)?);
     for p in &cfg.params {
         eprintln!("  gp={} gm={} omega={}", p.gp, p.gm, p.omega);
         let mut obs = vec![(0.0f64, 0.0f64, 0.0f64); steps + 1];

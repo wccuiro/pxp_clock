@@ -20,7 +20,9 @@
 //!     (diagonalized with dgeev instead of zgeev).
 //! The Néel state, the trace and the observables n, nn live only in (σ, τ) = (+, +).
 //!
-//! Outputs (rows ordered by sector then parameters; every row starts with q,gp,gm,omega,alpha):
+//! Outputs (rows ordered by sector then parameters; every row starts with q,gp,gm,omega,alpha).
+//! Named as the files of `lindblad`: every name ends in _L.._gp.._gm.._omega.._alpha.. with the
+//! values of the first parameter point, for example eigenvalues_alpha_L8_gp0.2_gm0.001_omega1_alpha0.4.csv:
 //!   eigenvalues_alpha.csv     (re,im)*
 //!   decay_alpha.csv           (re,im, c.re,c.im, o.re,o.im, w.re,w.im)*
 //!                               c_k: Néel expansion coefficient on the unit-norm right eigenvector r_k
@@ -32,8 +34,6 @@
 //!                               both for ρ∞ = Σ_{λ_k = 0} c_k r_k, the steady state reached from the
 //!                               Néel state (the steady state itself whenever it is unique)
 //!   cond_alpha.csv            (re,im,κ)*                  [if COMPUTE_CONDITION_NUMBERS]
-//! With a single point from the command line the names end in
-//! _alpha_L.._gp.._gm.._omega.._alpha.. instead of _alpha.
 //!
 //! Usage:  lindblad_alpha [L] [gp gm omega alpha]
 //!   without the parameters the grid defined in `Config::default_grid` is used.
@@ -91,7 +91,7 @@ impl Config {
                 }
             }
         }
-        Config { l, points, suffix: String::from("_alpha") }
+        Config { l, points, suffix: String::new() }
     }
 
     fn from_args() -> Result<Self, Box<dyn Error>> {
@@ -107,9 +107,10 @@ impl Config {
                 omega: args[3].parse()?,
             };
             let alpha: f64 = args[4].parse()?;
-            cfg.suffix = format!("_alpha_L{}_gp{}_gm{}_omega{}_alpha{}", cfg.l, p.gp, p.gm, p.omega, alpha);
             cfg.points = vec![(p, alpha)];
         }
+        let (p, alpha) = &cfg.points[0];
+        cfg.suffix = format!("_alpha_L{}_gp{}_gm{}_omega{}_alpha{}", cfg.l, p.gp, p.gm, p.omega, alpha);
         Ok(cfg)
     }
 }
