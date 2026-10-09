@@ -3,16 +3,15 @@
 //!   L[ρ] = -iΩ [H, ρ] + Σ_{γ∈{+,-}} γ Σ_j ( A^γ_j ρ A^γ_j† - ½ {A^γ_j† A^γ_j, ρ} )
 //!   H = Σ_j P_{j-1} X_j P_{j+1},   A^+_j = P_{j-1} σ^+_j P_{j+1},   A^-_j = P_{j-1} σ^-_j P_{j+1}
 //!
-//! Symmetries used (all exact):
+//! Symmetries used (all exact, implemented in common.rs):
 //!  1. Translations:  sectors ρ_Q = Σ_k P_k ρ P_{k-Q}, basis |n,k><m,k-Q|.
 //!     Only Q = 0 and Q = L/2 are computed (as before).
-//!  2. Reflection j -> -j mod L: each Q sector splits into parity blocks σ = ±1.
-//!  3. Hermiticity ρ -> ρ†: each parity block is a REAL matrix in a Hermitian basis
+//!  2. Reflection R: j -> -j mod L.
+//!  3. S: ρ -> C ρᵀ C with C = Π_j Z_j.
+//!     Each Q sector splits into the four blocks (σ, τ) = characters of {1, R, S, RS}.
+//!  4. Hermiticity ρ -> ρ†: each block is a REAL matrix in a Hermitian basis
 //!     (diagonalized with dgeev instead of zgeev).
-//!
-//! Conventions (identical to the previous code):
-//!   |r,k> = (1/√p) Σ_{d<p} e^{-i2πkd/L} T^d |r>,  T = cyclic shift left by one bit,
-//!   p = period of the representative r, k allowed iff k·p ≡ 0 (mod L).
+//! The Néel state, the trace and the observables n, nn live only in (σ, τ) = (+, +).
 //!
 //! Outputs (same files and column layouts as before, rows ordered by sector then parameters):
 //!   eigenvalues.csv     q,gp,gm,omega, (re,im)*
@@ -38,14 +37,12 @@ extern crate intel_mkl_src as _;
 use ndarray::Array2;
 use faer::{linalg::matmul::matmul, Accum, Mat, MatRef, Par};
 use ndarray_linalg::{Eigh, UPLO};
-use num_complex::Complex64 as C64;
-use rayon::prelude::*;
-use std::collections::HashMap;
 use std::error::Error;
-use std::f64::consts::{FRAC_1_SQRT_2, PI};
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::time::Instant;
+
+include!("../../common.rs");
 
 // ============================================================================
 // Run configuration
@@ -58,22 +55,9 @@ const COMPUTE_CONDITION_NUMBERS: bool = false;
 /// Eigenvalues with |Re|,|Im| below this are treated as steady states.
 const TOL_ZERO_EIG: f64 = 1e-8;
 
-struct Params {
-    gp: f64,
-    gm: f64,
-    omega: f64,
-}
-
 struct Config {
     l: usize,
     params: Vec<Params>,
-}
-
-fn linspace(a: f64, b: f64, n: usize) -> Vec<f64> {
-    if n <= 1 {
-        return vec![a];
-    }
-    (0..n).map(|i| a + (b - a) * i as f64 / (n - 1) as f64).collect()
 }
 
 impl Config {
@@ -219,513 +203,6 @@ fn lu_solve(
         None
     };
     Ok((x, norms))
-}
-
-// ============================================================================
-// Single-chain structure: Lucas configurations, translation orbits, momenta
-// ============================================================================
-
-const ZERO: C64 = C64 { re: 0.0, im: 0.0 };
-const ONE: C64 = C64 { re: 1.0, im: 0.0 };
-const IMAG: C64 = C64 { re: 0.0, im: 1.0 };
-const NONE: u32 = u32::MAX;
-
-struct Chain {
-    l: usize,
-    mask: u64,
-    /// All PBC-constrained (Lucas) configurations, ascending.
-    configs: Vec<u64>,
-    /// config -> index in `configs` (NONE if not allowed). Size 2^L.
-    #[allow(dead_code)]
-    conf_index: Vec<u32>,
-    /// config -> representative index and shift: config = T^shift rep. Size 2^L.
-    conf_rep: Vec<u32>,
-    conf_shift: Vec<u8>,
-    /// Orbit representatives (smallest member), their periods and orbits (as config indices).
-    reps: Vec<u64>,
-    period: Vec<usize>,
-    orbit: Vec<Vec<u32>>,
-    /// mom[k]: representatives allowed at momentum k; pos[k][rep]: position in mom[k].
-    mom: Vec<Vec<u32>>,
-    pos: Vec<Vec<u32>>,
-    /// Offsets of the single-copy momentum basis (index of |r,k> = ms_off[k] + pos[k][r]).
-    ms_off: Vec<usize>,
-    /// Reflection j -> -j mod L:  R|rep> = T^{refl_shift} |refl_rep>.
-    refl_rep: Vec<u32>,
-    refl_shift: Vec<u8>,
-    /// e^{i 2π j / L}
-    phases: Vec<C64>,
-}
-
-impl Chain {
-    fn new(l: usize) -> Self {
-        assert!(l >= 4 && l % 2 == 0 && l <= 28, "L must be even, 4 <= L <= 28");
-        let mask = (1u64 << l) - 1;
-        let rot = |s: u64, d: usize| -> u64 {
-            let d = d % l;
-            if d == 0 { s } else { ((s << d) | (s >> (l - d))) & mask }
-        };
-        let nconf = 1usize << l;
-        let mut configs = Vec::new();
-        let mut conf_index = vec![NONE; nconf];
-        for s in 0..nconf as u64 {
-            let ok = s & (s >> 1) == 0 && !((s & 1) != 0 && (s >> (l - 1)) & 1 != 0);
-            if ok {
-                conf_index[s as usize] = configs.len() as u32;
-                configs.push(s);
-            }
-        }
-        let reps: Vec<u64> = configs
-            .iter()
-            .copied()
-            .filter(|&s| (1..l).all(|d| rot(s, d) >= s))
-            .collect();
-        let mut conf_rep = vec![NONE; nconf];
-        let mut conf_shift = vec![0u8; nconf];
-        let mut period = Vec::with_capacity(reps.len());
-        let mut orbit = Vec::with_capacity(reps.len());
-        for (ri, &r) in reps.iter().enumerate() {
-            let p = (1..=l).find(|&d| rot(r, d) == r).unwrap();
-            period.push(p);
-            let mut orb = Vec::with_capacity(p);
-            for d in 0..p {
-                let c = rot(r, d) as usize;
-                conf_rep[c] = ri as u32;
-                conf_shift[c] = d as u8;
-                orb.push(conf_index[c]);
-            }
-            orbit.push(orb);
-        }
-        let mut mom = vec![Vec::new(); l];
-        let mut pos = vec![vec![NONE; reps.len()]; l];
-        for k in 0..l {
-            for ri in 0..reps.len() {
-                if (k * period[ri]) % l == 0 {
-                    pos[k][ri] = mom[k].len() as u32;
-                    mom[k].push(ri as u32);
-                }
-            }
-        }
-        let mut ms_off = vec![0usize; l + 1];
-        for k in 0..l {
-            ms_off[k + 1] = ms_off[k] + mom[k].len();
-        }
-        let reflect = |s: u64| -> u64 {
-            let rev = s.reverse_bits() >> (64 - l); // j -> L-1-j
-            ((rev << 1) | (rev >> (l - 1))) & mask // then j -> L-j (mod L)
-        };
-        let mut refl_rep = Vec::with_capacity(reps.len());
-        let mut refl_shift = Vec::with_capacity(reps.len());
-        for &r in &reps {
-            let c = reflect(r) as usize;
-            assert!(conf_rep[c] != NONE);
-            refl_rep.push(conf_rep[c]);
-            refl_shift.push(conf_shift[c]);
-        }
-        let phases = (0..l)
-            .map(|j| C64::from_polar(1.0, 2.0 * PI * j as f64 / l as f64))
-            .collect();
-        Chain {
-            l, mask, configs, conf_index, conf_rep, conf_shift, reps, period, orbit, mom, pos,
-            ms_off, refl_rep, refl_shift, phases,
-        }
-    }
-
-    #[inline]
-    fn rot(&self, s: u64, d: usize) -> u64 {
-        let d = d % self.l;
-        if d == 0 { s } else { ((s << d) | (s >> (self.l - d))) & self.mask }
-    }
-
-    /// e^{i 2π x / L}
-    #[inline]
-    fn ph(&self, x: i64) -> C64 {
-        self.phases[x.rem_euclid(self.l as i64) as usize]
-    }
-
-    #[inline]
-    fn ms(&self, k: usize, rep: usize) -> usize {
-        self.ms_off[k] + self.pos[k][rep] as usize
-    }
-
-    fn n_ms(&self) -> usize {
-        self.ms_off[self.l]
-    }
-}
-
-// ============================================================================
-// Single-copy operators in the momentum basis
-// ============================================================================
-
-/// table[ms][k'] = list of (rep', <rep',k'| O_0 |ms>) for a site-0 operator O_0
-/// that maps configurations to configurations.
-type OpTable = Vec<Vec<Vec<(u32, C64)>>>;
-
-fn site_op_table(ch: &Chain, f: impl Fn(u64) -> Option<u64>) -> OpTable {
-    let l = ch.l;
-    let mut table = Vec::with_capacity(ch.n_ms());
-    for k in 0..l {
-        for &ri in &ch.mom[k] {
-            let r = ri as usize;
-            let p = ch.period[r];
-            let mut acc: HashMap<(usize, u32), C64> = HashMap::new();
-            for d in 0..p {
-                let c = ch.rot(ch.reps[r], d);
-                if let Some(c2) = f(c) {
-                    let r2 = ch.conf_rep[c2 as usize];
-                    assert!(r2 != NONE, "operator left the constrained space");
-                    let e = ch.conf_shift[c2 as usize] as i64;
-                    let p2 = ch.period[r2 as usize];
-                    let amp = ch.ph(-(k as i64) * d as i64) / ((p * p2) as f64).sqrt();
-                    for k2 in 0..l {
-                        if (k2 * p2) % l == 0 {
-                            *acc.entry((k2, r2)).or_insert(ZERO) += amp * ch.ph(k2 as i64 * e);
-                        }
-                    }
-                }
-            }
-            let mut by_k = vec![Vec::new(); l];
-            for ((k2, r2), v) in acc {
-                if v.norm() > 1e-13 {
-                    by_k[k2].push((r2, v));
-                }
-            }
-            for v in by_k.iter_mut() {
-                v.sort_by_key(|x| x.0);
-            }
-            table.push(by_k);
-        }
-    }
-    table
-}
-
-struct Model {
-    /// h[ms] = (rep', <rep',k|H|ms>) with H = Σ_j PXP_j (same k only).
-    h: Vec<Vec<(u32, C64)>>,
-    /// Site-0 jump operators A^+_0, A^-_0 in the momentum basis.
-    a_plus: OpTable,
-    a_minus: OpTable,
-    /// Σ_j A^±_j† A^±_j is diagonal: eigenvalue per representative.
-    kappa_plus: Vec<f64>,
-    kappa_minus: Vec<f64>,
-}
-
-impl Model {
-    fn new(ch: &Chain) -> Self {
-        let l = ch.l;
-        let nb_empty = |c: u64| (c >> 1) & 1 == 0 && (c >> (l - 1)) & 1 == 0;
-        let h_tab = site_op_table(ch, |c| if nb_empty(c) { Some(c ^ 1) } else { None });
-        let a_plus = site_op_table(ch, |c| if nb_empty(c) && c & 1 == 0 { Some(c | 1) } else { None });
-        let a_minus = site_op_table(ch, |c| if nb_empty(c) && c & 1 == 1 { Some(c & !1) } else { None });
-        // H = Σ_j T^j h_0 T^-j  =>  <r',k|H|r,k> = L <r',k|h_0|r,k>
-        let mut h = Vec::with_capacity(ch.n_ms());
-        for k in 0..l {
-            for &ri in &ch.mom[k] {
-                let ms = ch.ms(k, ri as usize);
-                h.push(h_tab[ms][k].iter().map(|&(r, v)| (r, v * l as f64)).collect());
-            }
-        }
-        let bit = |c: u64, j: usize| (c >> (j % l)) & 1;
-        let mut kappa_plus = Vec::new();
-        let mut kappa_minus = Vec::new();
-        for &r in &ch.reps {
-            let mut kp = 0.0;
-            let mut km = 0.0;
-            for j in 0..l {
-                let nb0 = bit(r, j + l - 1) == 0 && bit(r, j + 1) == 0;
-                if nb0 && bit(r, j) == 0 { kp += 1.0; }
-                if nb0 && bit(r, j) == 1 { km += 1.0; }
-            }
-            kappa_plus.push(kp);
-            kappa_minus.push(km);
-        }
-        Model { h, a_plus, a_minus, kappa_plus, kappa_minus }
-    }
-
-    /// Applies the Lindbladian to the sector basis element `s` and reports every
-    /// nonzero output component (sector index, value) through `out` (duplicates possible).
-    #[inline]
-    fn apply<F: FnMut(usize, C64)>(&self, ch: &Chain, sec: &Sector, s: usize, p: &Params, out: &mut F) {
-        let l = ch.l;
-        let q = sec.q;
-        let (k, n, m) = sec.elems[s];
-        let (k, n, m) = (k as usize, n as usize, m as usize);
-        let kb = (k + l - q) % l;
-        let msa = ch.ms(k, n);
-        let msb = ch.ms(kb, m);
-
-        // -iΩ (Hρ - ρH)
-        let mi = C64::new(0.0, -p.omega);
-        for &(r, v) in &self.h[msa] {
-            out(sec.index(ch, k, r as usize, m), mi * v);
-        }
-        for &(r, v) in &self.h[msb] {
-            out(sec.index(ch, k, n, r as usize), -mi * v.conj());
-        }
-        // -½ {K, ρ},  K = Σ_j (γ+ A+†A+ + γ- A-†A-)  (diagonal)
-        let diag = -0.5
-            * (p.gp * (self.kappa_plus[n] + self.kappa_plus[m])
-                + p.gm * (self.kappa_minus[n] + self.kappa_minus[m]));
-        out(s, C64::new(diag, 0.0));
-        // Σ_j A_j ρ A_j† = L · P_Q[A_0 ρ A_0†]
-        for (g, tab) in [(p.gp, &self.a_plus), (p.gm, &self.a_minus)] {
-            if g == 0.0 {
-                continue;
-            }
-            let pref = g * l as f64;
-            for k1 in 0..l {
-                let la = &tab[msa][k1];
-                if la.is_empty() {
-                    continue;
-                }
-                let k2 = (k1 + l - q) % l;
-                let lb = &tab[msb][k2];
-                if lb.is_empty() {
-                    continue;
-                }
-                for &(r1, va) in la {
-                    let base = sec.off[k1] + ch.pos[k1][r1 as usize] as usize * sec.nb[k1];
-                    let pa = pref * va;
-                    for &(r2, vb) in lb {
-                        out(base + ch.pos[k2][r2 as usize] as usize, pa * vb.conj());
-                    }
-                }
-            }
-        }
-    }
-}
-
-// ============================================================================
-// Q sector: basis |n,k><m,k-Q|, reflection and Hermiticity partners
-// ============================================================================
-
-struct Sector {
-    q: usize,
-    dim: usize,
-    off: Vec<usize>,
-    nb: Vec<usize>,
-    /// (k, ket rep n, bra rep m) for every sector index.
-    elems: Vec<(u8, u32, u32)>,
-    /// Reflection: R|s> = chi[s] |part[s]>.
-    part: Vec<u32>,
-    chi: Vec<C64>,
-    /// Hermiticity: (|s>)† = |bar[s]>  (no phase).
-    bar: Vec<u32>,
-}
-
-impl Sector {
-    fn new(ch: &Chain, q: usize) -> Self {
-        let l = ch.l;
-        assert!((2 * q) % l == 0, "only Q = 0 and Q = L/2 are self-conjugate sectors");
-        let mut off = vec![0usize; l + 1];
-        let mut nb = vec![0usize; l];
-        let mut elems = Vec::new();
-        for k in 0..l {
-            let kb = (k + l - q) % l;
-            off[k] = elems.len();
-            nb[k] = ch.mom[kb].len();
-            for &n in &ch.mom[k] {
-                for &m in &ch.mom[kb] {
-                    elems.push((k as u8, n, m));
-                }
-            }
-        }
-        off[l] = elems.len();
-        let dim = elems.len();
-        let mut sec = Sector { q, dim, off, nb, elems, part: vec![0; dim], chi: vec![ZERO; dim], bar: vec![0; dim] };
-        for s in 0..dim {
-            let (k, n, m) = sec.elems[s];
-            let (k, n, m) = (k as usize, n as usize, m as usize);
-            let kb = (k + l - q) % l;
-            let kr = (l - k) % l;
-            sec.part[s] = sec.index(ch, kr, ch.refl_rep[n] as usize, ch.refl_rep[m] as usize) as u32;
-            let x = k as i64 * ch.refl_shift[n] as i64 - kb as i64 * ch.refl_shift[m] as i64;
-            sec.chi[s] = ch.ph(-x);
-            sec.bar[s] = sec.index(ch, kb, m, n) as u32;
-        }
-        sec
-    }
-
-    #[inline]
-    fn index(&self, ch: &Chain, k: usize, n: usize, m: usize) -> usize {
-        let kb = (k + ch.l - self.q) % ch.l;
-        self.off[k] + ch.pos[k][n] as usize * self.nb[k] + ch.pos[kb][m] as usize
-    }
-}
-
-// ============================================================================
-// Parity block with a real (Hermitian) basis
-// ============================================================================
-
-struct Block {
-    sigma: i32,
-    /// Real basis vectors e_α as sparse combinations of sector basis elements.
-    vecs: Vec<Vec<(u32, C64)>>,
-    /// For each sector index t: the (≤2) real basis vectors containing it, with e_α[t].
-    rm_len: Vec<u8>,
-    rm_idx: Vec<[u32; 2]>,
-    rm_val: Vec<[C64; 2]>,
-    /// Real-basis representation of linear functionals / the initial state.
-    tr: Vec<f64>,   // Tr(e_α)
-    nocc: Vec<f64>, // Tr(n e_α),        n  = (1/L) Σ_j n_j
-    nnn: Vec<f64>,  // Tr(nn e_α),       nn = (1/L) Σ_j n_{j-1} n_{j+1}
-    rho0: Vec<f64>, // <<e_α|ρ0>>       (Néel)
-}
-
-impl Block {
-    fn new(ch: &Chain, sec: &Sector, sigma: i32) -> Self {
-        let dim = sec.dim;
-        let sg = sigma as f64;
-        // --- reflection-symmetrized states |u,σ> = (|u> + σ R|u>)/N_u
-        let mut kpos = vec![NONE; dim];
-        let mut kept = Vec::new();
-        for u in 0..dim {
-            let p = sec.part[u] as usize;
-            let keep = p > u || (p == u && (ONE + sg * sec.chi[u]).norm() > 1e-8);
-            if keep {
-                kpos[u] = kept.len() as u32;
-                kept.push(u);
-            }
-        }
-        let comps = |u: usize| -> Vec<(u32, C64)> {
-            let p = sec.part[u] as usize;
-            if p == u {
-                vec![(u as u32, ONE)]
-            } else {
-                vec![(u as u32, C64::new(FRAC_1_SQRT_2, 0.0)), (p as u32, sg * sec.chi[u] * FRAC_1_SQRT_2)]
-            }
-        };
-        // --- Θ (ρ -> ρ†) in the ± basis:  Θ|u,σ> = φ_u |v,σ>
-        let mut vecs: Vec<Vec<(u32, C64)>> = Vec::with_capacity(kept.len());
-        for (pu, &u) in kept.iter().enumerate() {
-            let ub = sec.bar[u] as usize;
-            let (pv, phi) = if kpos[ub] != NONE {
-                (kpos[ub] as usize, ONE)
-            } else {
-                let w = sec.part[ub] as usize;
-                assert!(kpos[w] != NONE, "Hermiticity partner missing");
-                (kpos[w] as usize, sg * sec.chi[ub])
-            };
-            if pv < pu {
-                continue;
-            }
-            if pv == pu {
-                let rot = C64::from_polar(1.0, 0.5 * phi.arg());
-                vecs.push(comps(u).into_iter().map(|(t, c)| (t, c * rot)).collect());
-            } else {
-                let cu = comps(u);
-                let cv = comps(kept[pv]);
-                let mut er = Vec::with_capacity(4);
-                let mut ei = Vec::with_capacity(4);
-                for &(t, c) in &cu {
-                    er.push((t, c * FRAC_1_SQRT_2));
-                    ei.push((t, IMAG * c * FRAC_1_SQRT_2));
-                }
-                for &(t, c) in &cv {
-                    er.push((t, phi * c * FRAC_1_SQRT_2));
-                    ei.push((t, -IMAG * phi * c * FRAC_1_SQRT_2));
-                }
-                vecs.push(er);
-                vecs.push(ei);
-            }
-        }
-        assert_eq!(vecs.len(), kept.len());
-        // --- row map
-        let mut rm_len = vec![0u8; dim];
-        let mut rm_idx = vec![[0u32; 2]; dim];
-        let mut rm_val = vec![[ZERO; 2]; dim];
-        for (a, e) in vecs.iter().enumerate() {
-            for &(t, c) in e {
-                let t = t as usize;
-                let j = rm_len[t] as usize;
-                assert!(j < 2);
-                rm_idx[t][j] = a as u32;
-                rm_val[t][j] = c;
-                rm_len[t] += 1;
-            }
-        }
-        // --- functionals on the sector basis
-        let l = ch.l;
-        let neel: u64 = (0..l / 2).map(|j| 1u64 << (2 * j)).sum();
-        let neel_rep = ch.conf_rep[neel as usize];
-        let neel_elems: Vec<usize> = (0..dim)
-            .filter(|&s| sec.elems[s].1 == neel_rep && sec.elems[s].2 == neel_rep)
-            .collect();
-        let mut g = vec![0.0; dim];
-        let mut f = vec![0.0; dim];
-        let mut ff = vec![0.0; dim];
-        let mut r0 = vec![0.0; dim];
-        for s in 0..dim {
-            let (_, n, m) = sec.elems[s];
-            if sec.q == 0 && n == m {
-                let r = ch.reps[n as usize];
-                g[s] = 1.0;
-                f[s] = r.count_ones() as f64 / l as f64;
-                ff[s] = (0..l).filter(|&j| (r >> ((j + l - 1) % l)) & 1 == 1 && (r >> ((j + 1) % l)) & 1 == 1).count() as f64
-                    / l as f64;
-            }
-        }
-        for &s in &neel_elems {
-            r0[s] = 1.0 / neel_elems.len() as f64;
-        }
-        let lin = |w: &[f64], conj: bool| -> Vec<f64> {
-            vecs.iter()
-                .map(|e| e.iter().map(|&(t, c)| if conj { c.conj() } else { c } * w[t as usize]).sum::<C64>().re)
-                .collect()
-        };
-        let tr = lin(&g, false);
-        let nocc = lin(&f, false);
-        let nnn = lin(&ff, false);
-        let rho0 = lin(&r0, true);
-        Block { sigma, vecs, rm_len, rm_idx, rm_val, tr, nocc, nnn, rho0 }
-    }
-
-    fn dim(&self) -> usize {
-        self.vecs.len()
-    }
-
-    /// Fills `a` (column-major dim×dim) with the real Lindbladian block.
-    /// Returns the largest discarded imaginary part (should be ~1e-15).
-    fn build_matrix(&self, ch: &Chain, model: &Model, sec: &Sector, p: &Params, a: &mut [f64]) -> f64 {
-        let n = self.dim();
-        a.par_chunks_mut(n)
-            .enumerate()
-            .map_init(
-                || vec![ZERO; n],
-                |acc, (beta, col)| {
-                    for &(s, cs) in &self.vecs[beta] {
-                        model.apply(ch, sec, s as usize, p, &mut |t, v| {
-                            let w = cs * v;
-                            for j in 0..self.rm_len[t] as usize {
-                                acc[self.rm_idx[t][j] as usize] += self.rm_val[t][j].conj() * w;
-                            }
-                        });
-                    }
-                    let mut max_im: f64 = 0.0;
-                    for (x, c) in col.iter_mut().zip(acc.iter_mut()) {
-                        *x = c.re;
-                        max_im = max_im.max(c.im.abs());
-                        *c = ZERO;
-                    }
-                    max_im
-                },
-            )
-            .reduce(|| 0.0, f64::max)
-    }
-
-    /// Real-basis coordinates y -> sector-basis vector.
-    fn to_sector(&self, dim: usize, y: &[C64]) -> Vec<C64> {
-        let mut v = vec![ZERO; dim];
-        for (e, &ya) in self.vecs.iter().zip(y) {
-            if ya == ZERO {
-                continue;
-            }
-            for &(t, c) in e {
-                v[t as usize] += ya * c;
-            }
-        }
-        v
-    }
 }
 
 // ============================================================================
@@ -981,7 +458,7 @@ fn solve_block(
     let want_vectors =
         has_rho0 || COMPUTE_OEE || COMPUTE_CONDITION_NUMBERS || (COMPUTE_STEADY_STATE && has_trace);
 
-    let stage = |what: &str| eprintln!("    Q={} σ={:+} dim={}: {what}", sec.q, blk.sigma, n);
+    let stage = |what: &str| eprintln!("    Q={} (σ,τ)=({:+},{:+}) dim={}: {what}", sec.q, blk.sigma, blk.tau, n);
     // 1. build the real block
     stage("building matrix");
     let t0 = Instant::now();
@@ -1008,7 +485,7 @@ fn solve_block(
             }
             Err(e) => {
                 // Exactly singular eigenvector matrix (exceptional point): no eigen-expansion exists.
-                eprintln!("    WARNING Q={} σ={:+}: {e}; coefficients set to NaN", sec.q, blk.sigma);
+                eprintln!("    WARNING Q={} (σ,τ)=({:+},{:+}): {e}; coefficients set to NaN", sec.q, blk.sigma, blk.tau);
                 x = vec![f64::NAN; n];
             }
         }
@@ -1077,8 +554,8 @@ fn solve_block(
         records.push(rec);
     }
     eprintln!(
-        "    Q={} σ={:+} dim={:>6}  build {:7.2}s (max dropped Im {:.1e})  eig {:8.2}s  vectors={}{}",
-        sec.q, blk.sigma, n, t_build, max_im, t_eig, want_vectors,
+        "    Q={} (σ,τ)=({:+},{:+}) dim={:>6}  build {:7.2}s (max dropped Im {:.1e})  eig {:8.2}s  vectors={}{}",
+        sec.q, blk.sigma, blk.tau, n, t_build, max_im, t_eig, want_vectors,
         if has_rho0 { format!("  Σc·Tr(r)={:.12}  Σw={:.12}", sum_ctr.re, sum_w.re) } else { String::new() }
     );
     Ok(())
@@ -1145,11 +622,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut out = Outputs::create(l, &cfg.params[0])?;
     for q in [0, l / 2] {
         let sec = Sector::new(&ch, q);
-        let blocks = [Block::new(&ch, &sec, 1), Block::new(&ch, &sec, -1)];
+        let blocks: Vec<Block> =
+            [(1, 1), (1, -1), (-1, 1), (-1, -1)].iter().map(|&(sg, tg)| Block::new(&ch, &sec, sg, tg)).collect();
         eprintln!(
-            "Sector Q={q}: dim {} -> parity blocks {} (+) and {} (-)",
-            sec.dim, blocks[0].dim(), blocks[1].dim()
+            "Sector Q={q}: dim {} -> blocks (+,+) {}, (+,-) {}, (-,+) {}, (-,-) {}",
+            sec.dim, blocks[0].dim(), blocks[1].dim(), blocks[2].dim(), blocks[3].dim()
         );
+        assert_eq!(blocks.iter().map(Block::dim).sum::<usize>(), sec.dim, "blocks do not cover the sector");
         for p in &cfg.params {
             eprintln!("  gp={} gm={} omega={}", p.gp, p.gm, p.omega);
             let mut records = Vec::with_capacity(sec.dim);
@@ -1209,4 +688,31 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     eprintln!("done in {:.1}s", t_all.elapsed().as_secs_f64());
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Sizes of the blocks (+,+), (+,-), (-,+), (-,-) of the sector Q.
+    fn block_sizes(l: usize, q: usize) -> Vec<usize> {
+        let ch = Chain::new(l);
+        let sec = Sector::new(&ch, q);
+        let sizes: Vec<usize> =
+            [(1, 1), (1, -1), (-1, 1), (-1, -1)].iter().map(|&(sg, tg)| Block::new(&ch, &sec, sg, tg).dim()).collect();
+        assert_eq!(sizes.iter().sum::<usize>(), sec.dim);
+        sizes
+    }
+
+    #[test]
+    fn block_sizes_l14() {
+        assert_eq!(block_sizes(14, 0), [13347, 12864, 12127, 12487]);
+        assert_eq!(block_sizes(14, 7), [13033, 13033, 12319, 12319]);
+    }
+
+    #[test]
+    fn block_sizes_l16() {
+        assert_eq!(block_sizes(16, 0), [77812, 76566, 74618, 75579]);
+        assert_eq!(block_sizes(16, 8), [77149, 77008, 75279, 75138]);
+    }
 }
