@@ -1,7 +1,10 @@
 """
 Reference time evolution of the Neel state under the PXP Lindbladian (independent of the Rust code).
 
-    python3 tools/reference_evolution.py L T dt gp gm omega out.npy
+    python3 tools/reference_evolution.py L T dt gp gm omega out.npy [alpha]
+
+With alpha it is the partial projection model of src/bin/lindblad_alpha (full 2^L basis,
+see pxp_reference.py); without it the constrained model.
 
 rho(t) is propagated in the translation sectors Q = 0 and Q = L/2 with the dense matrix
 exponential P = expm(dt L_Q) (scipy.linalg.expm, Pade + scaling and squaring), rho(t+dt) = P rho(t).
@@ -23,19 +26,21 @@ from scipy.linalg import expm
 import pxp_reference as ref
 
 def main():
-  if len(sys.argv) != 8:
-    sys.exit("usage: reference_evolution.py L T dt gp gm omega out.npy")
+  if len(sys.argv) not in (8, 9):
+    sys.exit("usage: reference_evolution.py L T dt gp gm omega out.npy [alpha]")
   L = int(sys.argv[1])
   T, dt, gamma_plus, gamma_minus, omega = (float(x) for x in sys.argv[2:7])
   out_file = sys.argv[7]
+  alpha = float(sys.argv[8]) if len(sys.argv) == 9 else None
 
   steps = int(round(T / dt))
   times = np.arange(steps + 1) * dt
 
   t0 = time.time()
-  states, index, Lind = ref.build_model(L, gamma_plus, gamma_minus, omega)
+  states, index, Lind = ref.build_model(L, gamma_plus, gamma_minus, omega, alpha)
   f = ref.trace_vectors(L, states, index)
-  print(f"L = {L}: {len(states)} constrained configurations, {steps} steps of dt = {dt}  (built in {time.time()-t0:.1f}s)")
+  model = "constrained" if alpha is None else f"alpha = {alpha}"
+  print(f"L = {L}, {model}: {len(states)} configurations, {steps} steps of dt = {dt}  (built in {time.time()-t0:.1f}s)")
 
   names = ('n', 'nn', 'rho0')
   obs = np.zeros((steps + 1, 3))

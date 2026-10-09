@@ -12,6 +12,15 @@ The translation sectors Q = 0 and Q = L/2 (the two that contain the Neel state) 
 from the orbits of pairs (a, b) under (a, b) -> (T a, T b). This is a different construction
 from the |n,k><m,k-Q| basis of the Rust code, and the invariance of the sector under L is
 checked numerically (reduce_to_sector returns the residual).
+
+Partial projection (alpha) model, as in src/bin/lindblad_alpha: the Hamiltonian keeps the strict
+blockade, H = sum_j P_{j-1} X_j P_{j+1}, but the jumps use the soft projector
+
+    A^+-_j = P^alpha_{j-1} sigma^+-_j P^alpha_{j+1},   P^alpha = [(1+alpha)|0><0| + (1-alpha)|1><1|] / (1+|alpha|)
+
+so adjacent excitations are created for alpha < 1 and the full 2^L basis is needed.
+alpha = 1 gives P^alpha = |0><0| (the constrained model, embedded in the full basis).
+All builders take alpha = None for the constrained model.
 """
 import numpy as np
 import scipy.sparse as sp
@@ -30,8 +39,11 @@ def fibonacci_basis(L):
         states.append(i)
   return states
 
-def generation_basis(L):
-  rep_states = fibonacci_basis(L)
+def full_basis(L):
+  return list(range(1 << L))
+
+def generation_basis(L, constrained=True):
+  rep_states = fibonacci_basis(L) if constrained else full_basis(L)
   rep_index = {s: i for i,  s in enumerate(rep_states)}
   return rep_states, rep_index
 
@@ -55,7 +67,14 @@ def Hamiltonian(L, states, index, omega):
 ###################### GENERATION OF THE DISSIPATOR #########################
 #############################################################################
 
-def dissipation(L, states, index, gamma_plus, gamma_minus):
+def soft_projector(L, state, site, alpha):
+  """Diagonal element of P^alpha at `site`."""
+  c_norm = 1.0 / (1.0 + abs(alpha))
+  if state & (1 << (site % L)):
+    return c_norm * (1.0 - alpha)
+  return c_norm * (1.0 + alpha)
+
+def dissipation(L, states, index, gamma_plus, gamma_minus, alpha=None):
   N = len(states)
   I = sp.identity(N, format='csr')
   D_minus = sp.csr_matrix((N**2, N**2))
@@ -67,12 +86,16 @@ def dissipation(L, states, index, gamma_plus, gamma_minus):
     L_plus_i = sp.lil_matrix((N, N))
 
     for state in states:
-      if ((state >> ((i-1)%L)) & 1) == 0 and ((state >> ((i+1)%L)) & 1) == 0:
+      if alpha is None:
+        factor = 1.0 if ((state >> ((i-1)%L)) & 1) == 0 and ((state >> ((i+1)%L)) & 1) == 0 else 0.0
+      else:
+        factor = soft_projector(L, state, i-1, alpha) * soft_projector(L, state, i+1, alpha)
+      if factor != 0.0:
         state_p = state ^ (1 << i)
         if state & 1<<i:
-          L_minus_i [ index[state_p], index[state]] += 1
+          L_minus_i [ index[state_p], index[state]] += factor
         else:
-          L_plus_i [ index[state_p], index[state]] += 1
+          L_plus_i [ index[state_p], index[state]] += factor
 
     L_minus_i = L_minus_i.tocsr()
     L_plus_i = L_plus_i.tocsr()
@@ -181,12 +204,89 @@ def trace_vectors(L, states, index):
 ###################### FULL MODEL ###########################################
 #############################################################################
 
-def build_model(L, gamma_plus, gamma_minus, omega):
-  states, index = generation_basis(L)
+def build_model(L, gamma_plus, gamma_minus, omega, alpha=None):
+  states, index = generation_basis(L, constrained=(alpha is None))
   H = Hamiltonian(L, states, index, omega)
-  D = dissipation(L, states, index, gamma_plus, gamma_minus)
+  D = dissipation(L, states, index, gamma_plus, gamma_minus, alpha)
   Lind = lindblad_evolution(H, D)
   return states, index, Lind
 
 def sectors(L):
   return [0, L // 2]
+
+#############################################################################
+###################### REFLECTION, S AND HERMITICITY ########################
+#############################################################################
+
+def reflection(L, state):
+  """j -> -j mod L"""
+  out = 0
+  for j in range(L):
+    if state & (1 << j):
+      out |= 1 << ((L - j) % L)
+  return out
+
+def symmetry_superoperators(L, states, index):
+  """
+  Sparse N^2 x N^2 matrices acting on vec(rho):
+    R : |a><b| -> |Ra><Rb|                  reflection j -> -j mod L
+    S : |a><b| -> (-1)^{|a|+|b|} |b><a|     rho -> C rho^T C,  C = prod_j Z_j
+    K : |a><b| -> |b><a|                    rho -> rho^dag is K followed by complex conjugation
+  """
+  N = len(states)
+  a, b = np.divmod(np.arange(N * N), N)
+  refl = np.array([index[reflection(L, s)] for s in states])
+  parity = np.array([bin(s).count("1") % 2 for s in states])
+  shape = (N * N, N * N)
+  R = sp.csr_matrix((np.ones(N * N), (refl[a] * N + refl[b], a * N + b)), shape=shape)
+  S = sp.csr_matrix((1.0 - 2.0 * ((parity[a] + parity[b]) % 2), (b * N + a, a * N + b)), shape=shape)
+  K = sp.csr_matrix((np.ones(N * N), (b * N + a, a * N + b)), shape=shape)
+  return R, S, K
+
+def symmetry_blocks(B, R, S):
+  """
+  Projectors of the sector with basis B onto the four blocks (sigma, tau), the characters of
+  {1, R, S, RS}:  P = (1 + sigma R)(1 + tau S) / 4, as sparse matrices in the sector basis.
+  Also returns max|R B - B (B^T R B)| and the same for S (the sector must be invariant).
+  """
+  one = sp.identity(B.shape[1], format='csr')
+  R_Q = (B.T @ R @ B).tocsr()
+  S_Q = (B.T @ S @ B).tocsr()
+  residual = max(abs(R @ B - B @ R_Q).max(), abs(S @ B - B @ S_Q).max())
+  blocks = {}
+  for sigma in (1, -1):
+    for tau in (1, -1):
+      blocks[(sigma, tau)] = (0.25 * (one + sigma * R_Q) @ (one + tau * S_Q)).tocsr()
+  return blocks, residual
+
+def block_sizes(L, constrained=True):
+  """
+  Sizes of the blocks (sigma, tau) of the sectors Q = 0 and Q = L/2 without building anything,
+  from the number F(g) of configurations fixed by g:
+
+      dim = 1/(4L) sum_d s_Q^d [ F(T^d)^2 + sigma F(T^d R)^2 + tau F(T^{2d}) + sigma tau N ],
+
+  s_Q = +1 (Q = 0), -1 (Q = L/2). Returns {Q: {(sigma, tau): dim}}.
+  """
+  mask = (1 << L) - 1
+  x = np.arange(1 << L, dtype=np.int64)
+  if constrained:
+    x = x[((x & (x >> 1)) == 0) & ~(((x & 1) == 1) & (((x >> (L - 1)) & 1) == 1))]
+  N = len(x)
+  rot = lambda y, d: y if d % L == 0 else ((y << (d % L)) | (y >> (L - d % L))) & mask
+  refl = np.zeros_like(x)
+  for j in range(L):
+    refl |= ((x >> j) & 1) << ((L - j) % L)
+  fixed = lambda y: int(np.count_nonzero(y == x))
+
+  sizes = {}
+  for Q in sectors(L):
+    total = {(sigma, tau): 0 for sigma in (1, -1) for tau in (1, -1)}
+    for d in range(L):
+      s_Q = -1 if (Q != 0 and d % 2) else 1
+      f_T, f_TR, f_T2 = fixed(rot(x, d)), fixed(rot(refl, d)), fixed(rot(x, 2 * d))
+      for (sigma, tau) in total:
+        total[(sigma, tau)] += s_Q * (f_T**2 + sigma * f_TR**2 + tau * f_T2 + sigma * tau * N)
+    assert all(v % (4 * L) == 0 for v in total.values())
+    sizes[Q] = {key: v // (4 * L) for key, v in total.items()}
+  return sizes

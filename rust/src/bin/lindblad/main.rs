@@ -48,7 +48,7 @@ include!("../../common.rs");
 // Run configuration
 // ============================================================================
 
-const COMPUTE_OEE: bool = true;
+const COMPUTE_OEE: bool = false;
 const COMPUTE_STEADY_STATE: bool = true;
 const COMPUTE_CONDITION_NUMBERS: bool = false;
 
@@ -614,8 +614,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     rayon::ThreadPoolBuilder::new().stack_size(256 << 20).build_global().ok();
     faer::set_global_parallelism(Par::Seq);
     lapack_self_test()?;
-    let ch = Chain::new(l);
-    let model = Model::new(&ch);
+    let ch = Chain::new(l, true);
+    let model = Model::new(&ch, None);
     let oee = OeeContext::new(&ch);
     eprintln!("L = {l}: {} constrained configurations, {} orbits", ch.configs.len(), ch.reps.len());
 
@@ -696,7 +696,7 @@ mod tests {
 
     /// Sizes of the blocks (+,+), (+,-), (-,+), (-,-) of the sector Q.
     fn block_sizes(l: usize, q: usize) -> Vec<usize> {
-        let ch = Chain::new(l);
+        let ch = Chain::new(l, true);
         let sec = Sector::new(&ch, q);
         let sizes: Vec<usize> =
             [(1, 1), (1, -1), (-1, 1), (-1, -1)].iter().map(|&(sg, tg)| Block::new(&ch, &sec, sg, tg).dim()).collect();

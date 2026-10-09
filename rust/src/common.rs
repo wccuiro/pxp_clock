@@ -13,6 +13,12 @@
 //  4. Hermiticity Θ: ρ -> ρ† (antilinear): in a Hermitian operator basis every block is REAL.
 // Each Q sector splits into the four blocks (σ, τ) = characters of {1, R, S, RS}.
 //
+// Partial projection (alpha) model, `Chain::new(l, false)` and `Model::new(&ch, Some(α))`:
+// the Hamiltonian keeps the strict blockade but the jumps use the soft projector
+//   A^±_j = P^α_{j-1} σ^±_j P^α_{j+1},   P^α = [(1+α)|0><0| + (1-α)|1><1|] / (1+|α|),
+// so adjacent excitations are created for α < 1 and the full 2^L basis is needed.
+// The jumps stay real with CAC = -A, so the same four symmetries and blocks hold.
+//
 // Conventions:
 //   |r,k> = (1/√p) Σ_{d<p} e^{-i2πkd/L} T^d |r>,  T = cyclic shift left by one bit,
 //   p = period of the representative r, k allowed iff k·p ≡ 0 (mod L).
@@ -47,7 +53,7 @@ const NONE: u32 = u32::MAX;
 struct Chain {
     l: usize,
     mask: u64,
-    /// All PBC-constrained (Lucas) configurations, ascending.
+    /// All PBC-constrained (Lucas) configurations, or all 2^L if not `constrained`, ascending.
     configs: Vec<u64>,
     /// config -> index in `configs` (NONE if not allowed). Size 2^L.
     #[allow(dead_code)]
@@ -73,7 +79,7 @@ struct Chain {
 }
 
 impl Chain {
-    fn new(l: usize) -> Self {
+    fn new(l: usize, constrained: bool) -> Self {
         assert!(l >= 4 && l % 2 == 0 && l <= 28, "L must be even, 4 <= L <= 28");
         let mask = (1u64 << l) - 1;
         let rot = |s: u64, d: usize| -> u64 {
@@ -84,7 +90,7 @@ impl Chain {
         let mut configs = Vec::new();
         let mut conf_index = vec![NONE; nconf];
         for s in 0..nconf as u64 {
-            let ok = s & (s >> 1) == 0 && !((s & 1) != 0 && (s >> (l - 1)) & 1 != 0);
+            let ok = !constrained || (s & (s >> 1) == 0 && !((s & 1) != 0 && (s >> (l - 1)) & 1 != 0));
             if ok {
                 conf_index[s as usize] = configs.len() as u32;
                 configs.push(s);
@@ -173,10 +179,10 @@ impl Chain {
 // ============================================================================
 
 /// table[ms][k'] = list of (rep', <rep',k'| O_0 |ms>) for a site-0 operator O_0
-/// that maps configurations to configurations.
+/// that maps a configuration to a configuration times a real weight.
 type OpTable = Vec<Vec<Vec<(u32, C64)>>>;
 
-fn site_op_table(ch: &Chain, f: impl Fn(u64) -> Option<u64>) -> OpTable {
+fn site_op_table(ch: &Chain, f: impl Fn(u64) -> Option<(u64, f64)>) -> OpTable {
     let l = ch.l;
     let mut table = Vec::with_capacity(ch.n_ms());
     for k in 0..l {
@@ -186,12 +192,12 @@ fn site_op_table(ch: &Chain, f: impl Fn(u64) -> Option<u64>) -> OpTable {
             let mut acc: HashMap<(usize, u32), C64> = HashMap::new();
             for d in 0..p {
                 let c = ch.rot(ch.reps[r], d);
-                if let Some(c2) = f(c) {
+                if let Some((c2, wgt)) = f(c) {
                     let r2 = ch.conf_rep[c2 as usize];
-                    assert!(r2 != NONE, "operator left the constrained space");
+                    assert!(r2 != NONE, "operator left the configuration space");
                     let e = ch.conf_shift[c2 as usize] as i64;
                     let p2 = ch.period[r2 as usize];
-                    let amp = ch.ph(-(k as i64) * d as i64) / ((p * p2) as f64).sqrt();
+                    let amp = ch.ph(-(k as i64) * d as i64) * wgt / ((p * p2) as f64).sqrt();
                     for k2 in 0..l {
                         if (k2 * p2) % l == 0 {
                             *acc.entry((k2, r2)).or_insert(ZERO) += amp * ch.ph(k2 as i64 * e);
@@ -226,12 +232,22 @@ struct Model {
 }
 
 impl Model {
-    fn new(ch: &Chain) -> Self {
+    /// alpha = None: strict projectors P = |0><0| in the jumps; Some(α): soft projectors
+    /// P^α = [(1+α)|0><0| + (1-α)|1><1|] / (1+|α|). The Hamiltonian always keeps the strict blockade.
+    fn new(ch: &Chain, alpha: Option<f64>) -> Self {
         let l = ch.l;
+        let soft = |c: u64, j: usize| -> f64 {
+            let occ = (c >> (j % l)) & 1 == 1;
+            match alpha {
+                None => if occ { 0.0 } else { 1.0 },
+                Some(a) => (if occ { 1.0 - a } else { 1.0 + a }) / (1.0 + a.abs()),
+            }
+        };
+        let wgt = |c: u64, j: usize| soft(c, j + l - 1) * soft(c, j + 1);
         let nb_empty = |c: u64| (c >> 1) & 1 == 0 && (c >> (l - 1)) & 1 == 0;
-        let h_tab = site_op_table(ch, |c| if nb_empty(c) { Some(c ^ 1) } else { None });
-        let a_plus = site_op_table(ch, |c| if nb_empty(c) && c & 1 == 0 { Some(c | 1) } else { None });
-        let a_minus = site_op_table(ch, |c| if nb_empty(c) && c & 1 == 1 { Some(c & !1) } else { None });
+        let h_tab = site_op_table(ch, |c| if nb_empty(c) { Some((c ^ 1, 1.0)) } else { None });
+        let a_plus = site_op_table(ch, |c| if wgt(c, 0) != 0.0 && c & 1 == 0 { Some((c | 1, wgt(c, 0))) } else { None });
+        let a_minus = site_op_table(ch, |c| if wgt(c, 0) != 0.0 && c & 1 == 1 { Some((c & !1, wgt(c, 0))) } else { None });
         // H = Σ_j T^j h_0 T^-j  =>  <r',k|H|r,k> = L <r',k|h_0|r,k>
         let mut h = Vec::with_capacity(ch.n_ms());
         for k in 0..l {
@@ -247,9 +263,8 @@ impl Model {
             let mut kp = 0.0;
             let mut km = 0.0;
             for j in 0..l {
-                let nb0 = bit(r, j + l - 1) == 0 && bit(r, j + 1) == 0;
-                if nb0 && bit(r, j) == 0 { kp += 1.0; }
-                if nb0 && bit(r, j) == 1 { km += 1.0; }
+                let w2 = wgt(r, j) * wgt(r, j);
+                if bit(r, j) == 0 { kp += w2; } else { km += w2; }
             }
             kappa_plus.push(kp);
             kappa_minus.push(km);

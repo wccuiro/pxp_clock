@@ -1,7 +1,10 @@
 """
 Reference diagonalization of the PXP Lindbladian (independent of the Rust code).
 
-    python3 tools/reference_diag.py L gp gm omega out.json
+    python3 tools/reference_diag.py L gp gm omega out.json [alpha]
+
+With alpha it is the partial projection model of src/bin/lindblad_alpha (full 2^L basis,
+see pxp_reference.py); without it the constrained model.
 
 For the sectors Q = 0 and Q = L/2 it writes, per eigenmode k of the dense sector matrix:
   lambda_k
@@ -9,10 +12,12 @@ For the sectors Q = 0 and Q = L/2 it writes, per eigenmode k of the dense sector
   o_k   Tr(r_k^dag rho0)
   w_k   c_k Tr(n r_k)            ->  <n>(t) = sum_k w_k e^{lambda_k t}
   oee_k operator entanglement entropy of r_k^dag r_k across the cut [0, L/2) | [L/2, L)
-and the steady state (<n>, <nn>, spectrum of rho_ss with the occupation of each eigenvector).
+and the steady state (<n>, <nn>, spectrum of rho_ss with the occupation of each eigenvector),
+if it is unique.
 
 c_k and o_k carry the arbitrary phase of r_k; |c|, |o|, c conj(o) and w do not.
-Everything is dense and exact; practical up to L = 10.
+Everything is dense and exact; practical up to L = 10 (constrained) and L = 6 (alpha;
+L = 8 was measured at 4.8 GB and 11-17 min).
 """
 import sys
 import json
@@ -35,11 +40,12 @@ def fibonacci_sub_basis(L):
       states.append(i)
   return states
 
-def schmidt_indices(L, states):
+def schmidt_indices(L, states, constrained=True):
   """Row/column of the A|B Schmidt matrix for every element S[b1, b2] (A = lower L/2 bits)."""
   L_A = L // 2
-  index_A = {s: i for i, s in enumerate(fibonacci_sub_basis(L_A))}
-  index_B = {s: i for i, s in enumerate(fibonacci_sub_basis(L - L_A))}
+  sub_basis = fibonacci_sub_basis if constrained else ref.full_basis
+  index_A = {s: i for i, s in enumerate(sub_basis(L_A))}
+  index_B = {s: i for i, s in enumerate(sub_basis(L - L_A))}
   low = np.array([index_A[s & ((1 << L_A) - 1)] for s in states])
   up = np.array([index_B[s >> L_A] for s in states])
   d_A, d_B = len(index_A), len(index_B)
@@ -64,20 +70,22 @@ def operator_entanglement(r, rows, cols, d_A, d_B):
 #############################################################################
 
 def main():
-  if len(sys.argv) != 6:
-    sys.exit("usage: reference_diag.py L gp gm omega out.json")
+  if len(sys.argv) not in (6, 7):
+    sys.exit("usage: reference_diag.py L gp gm omega out.json [alpha]")
   L = int(sys.argv[1])
   gamma_plus, gamma_minus, omega = (float(x) for x in sys.argv[2:5])
   out_file = sys.argv[5]
+  alpha = float(sys.argv[6]) if len(sys.argv) == 7 else None
 
   t0 = time.time()
-  states, index, Lind = ref.build_model(L, gamma_plus, gamma_minus, omega)
+  states, index, Lind = ref.build_model(L, gamma_plus, gamma_minus, omega, alpha)
   N = len(states)
   f = ref.trace_vectors(L, states, index)
-  rows, cols, d_A, d_B = schmidt_indices(L, states)
-  print(f"L = {L}: {N} constrained configurations, operator space {N*N}  (built in {time.time()-t0:.1f}s)")
+  rows, cols, d_A, d_B = schmidt_indices(L, states, constrained=(alpha is None))
+  model = "constrained" if alpha is None else f"alpha = {alpha}"
+  print(f"L = {L}, {model}: {N} configurations, operator space {N*N}  (built in {time.time()-t0:.1f}s)")
 
-  result = {"L": L, "gp": gamma_plus, "gm": gamma_minus, "omega": omega, "sectors": {}, "steady": None}
+  result = {"L": L, "gp": gamma_plus, "gm": gamma_minus, "omega": omega, "alpha": alpha, "sectors": {}, "steady": None}
 
   for Q in ref.sectors(L):
     t0 = time.time()
@@ -101,7 +109,10 @@ def main():
 
     if Q == 0:
       k0 = np.argmin(np.abs(eigvals))
-      if np.abs(eigvals[k0]) < TOL_ZERO_EIG and np.abs(tr_r[k0]) > 1e-10:
+      zero_modes = int(np.sum(np.abs(eigvals) < TOL_ZERO_EIG))
+      if zero_modes > 1:
+        print(f"  Q=0: {zero_modes} zero modes, the steady state is not unique and is not written")
+      elif np.abs(eigvals[k0]) < TOL_ZERO_EIG and np.abs(tr_r[k0]) > 1e-10:
         rho_ss = (B @ V[:, k0]).reshape((N, N), order='C') / tr_r[k0]
         rho_ss = 0.5 * (rho_ss + rho_ss.conj().T)
         p, U = np.linalg.eigh(rho_ss)

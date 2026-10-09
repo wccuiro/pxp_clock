@@ -175,8 +175,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let l = cfg.l;
     let steps = (cfg.t_final / cfg.dt).round() as usize;
     let t_all = Instant::now();
-    let ch = Chain::new(l);
-    let model = Model::new(&ch);
+    let ch = Chain::new(l, true);
+    let model = Model::new(&ch, None);
     eprintln!(
         "L = {l}: {} constrained configurations, {} orbits; T = {}, dt = {}, {} steps",
         ch.configs.len(), ch.reps.len(), cfg.t_final, cfg.dt, steps
